@@ -1,0 +1,9 @@
+# Rust build artifacts
+/target/
+
+# Claude Code internal files — not for public consumption
+CLAUDE.md
+docs/superpowers/
+
+# Local test artifacts
+/tmp/flint-test/
