@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::sync::mpsc::Receiver;
+use std::time::Duration;
 
-use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{execv, fork, ForkResult, Pid};
 use thiserror::Error;
@@ -39,10 +39,6 @@ pub fn run(
     ready_rx: Receiver<String>,
 ) -> Result<(), ExecutorError> {
     use std::sync::mpsc::TryRecvError;
-
-    unsafe {
-        let _ = signal(Signal::SIGCHLD, SigHandler::SigDfl);
-    }
 
     let svc_by_name: HashMap<String, ServiceDef> =
         services.into_iter().map(|s| (s.service.name.clone(), s)).collect();
@@ -87,31 +83,51 @@ pub fn run(
             break;
         }
 
-        // Block waiting for one child to exit
-        match waitpid(None, Some(WaitPidFlag::empty())) {
-            Ok(WaitStatus::Exited(pid, code)) => {
-                if let Some(name) = pid_to_name.remove(&pid) {
-                    eprintln!("[flint] exited: {} (code={})", name, code);
-                    if ready_reported.insert(name.clone()) {
-                        let newly = graph.mark_ready(&name);
-                        to_start.extend(newly);
+        // Wait up to 50 ms for a pidfile-ready signal, then poll children.
+        // Using recv_timeout lets us wake as soon as a daemon writes its pidfile.
+        if let Ok(name) = ready_rx.recv_timeout(Duration::from_millis(50)) {
+            if ready_reported.insert(name.clone()) {
+                eprintln!("[flint] ready (pidfile): {}", name);
+                let newly = graph.mark_ready(&name);
+                to_start.extend(newly);
+            }
+        }
+
+        // Poll each tracked child individually (WNOHANG) to avoid stealing
+        // children that belong to other concurrent callers (e.g. test threads).
+        let pids: Vec<Pid> = pid_to_name.keys().copied().collect();
+        for pid in pids {
+            match waitpid(pid, Some(WaitPidFlag::WNOHANG)) {
+                Ok(WaitStatus::Exited(pid, code)) => {
+                    if let Some(name) = pid_to_name.remove(&pid) {
+                        eprintln!("[flint] exited: {} (code={})", name, code);
+                        if ready_reported.insert(name.clone()) {
+                            let newly = graph.mark_ready(&name);
+                            to_start.extend(newly);
+                        }
+                        completed += 1;
                     }
+                }
+                Ok(WaitStatus::Signaled(pid, sig, _)) => {
+                    if let Some(name) = pid_to_name.remove(&pid) {
+                        eprintln!("[flint] killed: {} (signal={:?})", name, sig);
+                        if ready_reported.insert(name.clone()) {
+                            let newly = graph.mark_ready(&name);
+                            to_start.extend(newly);
+                        }
+                        completed += 1;
+                    }
+                }
+                Ok(WaitStatus::StillAlive) => {}
+                Ok(_) => {}
+                Err(nix::Error::ECHILD) => {
+                    // Process was already reaped (shouldn't happen in normal use).
+                    pid_to_name.remove(&pid);
                     completed += 1;
                 }
+                Err(nix::Error::EINTR) => {}
+                Err(e) => return Err(ExecutorError::Fork(e)),
             }
-            Ok(WaitStatus::Signaled(pid, sig, _)) => {
-                if let Some(name) = pid_to_name.remove(&pid) {
-                    eprintln!("[flint] killed: {} (signal={:?})", name, sig);
-                    if ready_reported.insert(name.clone()) {
-                        let newly = graph.mark_ready(&name);
-                        to_start.extend(newly);
-                    }
-                    completed += 1;
-                }
-            }
-            Ok(_) => {}
-            Err(nix::Error::ECHILD) => break,
-            Err(e) => return Err(ExecutorError::Fork(e)),
         }
     }
 
