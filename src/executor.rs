@@ -127,11 +127,16 @@ pub fn run(
                 Ok(WaitStatus::Signaled(pid, sig, _)) => {
                     if let Some(name) = pid_to_name.remove(&pid) {
                         eprintln!("[flint] killed: {} (signal={:?})", name, sig);
+                        completed += 1;
+                        if !ready_reported.contains(&name) {
+                            for dep in graph.needs_dependents(&name) {
+                                blocked_services.insert(dep.clone());
+                            }
+                        }
                         if ready_reported.insert(name.clone()) {
                             let newly = graph.mark_ready(&name);
                             to_start.extend(newly);
                         }
-                        completed += 1;
                     }
                 }
                 Ok(WaitStatus::StillAlive) => {}
