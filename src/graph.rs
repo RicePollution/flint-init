@@ -20,6 +20,8 @@ pub struct ServiceGraph {
     dependents: HashMap<String, Vec<String>>,
     /// Current in-degree for each service (decremented as deps become ready).
     in_degree: HashMap<String, usize>,
+    /// Reverse adjacency covering only `needs` edges (hard dependencies).
+    needs_dependents: HashMap<String, Vec<String>>,
 }
 
 impl ServiceGraph {
@@ -64,6 +66,18 @@ impl ServiceGraph {
             }
         }
 
+        let mut needs_dependents: HashMap<String, Vec<String>> = HashMap::new();
+        for svc in &services {
+            needs_dependents.entry(svc.service.name.clone()).or_default();
+        }
+        for svc in &services {
+            if let Some(deps) = &svc.deps {
+                for dep in &deps.needs {
+                    needs_dependents.entry(dep.clone()).or_default().push(svc.service.name.clone());
+                }
+            }
+        }
+
         // Cycle detection via Kahn's algorithm
         let mut queue: VecDeque<String> = in_degree
             .iter()
@@ -95,7 +109,7 @@ impl ServiceGraph {
             return Err(GraphError::Cycle(cycle_nodes.join(", ")));
         }
 
-        Ok(ServiceGraph { services: service_map, dependents, in_degree })
+        Ok(ServiceGraph { services: service_map, dependents, in_degree, needs_dependents })
     }
 
     /// Services with in-degree zero — start these immediately at boot.
@@ -138,6 +152,10 @@ impl ServiceGraph {
 
     pub fn is_empty(&self) -> bool {
         self.services.is_empty()
+    }
+
+    pub fn needs_dependents(&self, name: &str) -> &[String] {
+        self.needs_dependents.get(name).map(Vec::as_slice).unwrap_or(&[])
     }
 }
 
@@ -230,5 +248,36 @@ mod tests {
         let services = vec![make_service("a", &["a"], &[])];
         let result = ServiceGraph::build(services);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn needs_dependents_populated_correctly() {
+        // b has both after AND needs on a; c has after-only
+        let services = vec![
+            make_service("a", &[], &[]),
+            make_service("b", &["a"], &["a"]),
+            make_service("c", &["a"], &[]),
+        ];
+        let graph = ServiceGraph::build(services).unwrap();
+        let mut deps = graph.needs_dependents("a").to_vec();
+        deps.sort();
+        assert_eq!(deps, vec!["b"]);
+    }
+
+    #[test]
+    fn needs_dependents_empty_for_after_only() {
+        let services = vec![
+            make_service("a", &[], &[]),
+            make_service("b", &["a"], &[]),
+        ];
+        let graph = ServiceGraph::build(services).unwrap();
+        assert_eq!(graph.needs_dependents("a"), &[] as &[String]);
+    }
+
+    #[test]
+    fn needs_dependents_empty_for_unknown_service() {
+        let services = vec![make_service("a", &[], &[])];
+        let graph = ServiceGraph::build(services).unwrap();
+        assert_eq!(graph.needs_dependents("nonexistent"), &[] as &[String]);
     }
 }
