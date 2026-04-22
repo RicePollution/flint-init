@@ -35,7 +35,9 @@ fn spawn_service(def: &ServiceDef) -> Result<Pid, ExecutorError> {
     match unsafe { fork() }? {
         ForkResult::Parent { child } => Ok(child),
         ForkResult::Child => {
-            // Task 4 (oom_score_adj) will add resource-limit logic here.
+            if let Some(adj) = def.resources.as_ref().and_then(|r| r.oom_score_adj) {
+                let _ = std::fs::write("/proc/self/oom_score_adj", format!("{}\n", adj));
+            }
             let _ = execv(&exec_path, &parts);
             std::process::exit(127);
         }
@@ -276,5 +278,14 @@ mod tests {
         ];
         let graph = ServiceGraph::build(services.clone()).unwrap();
         assert!(run_no_ready(graph, services).is_ok());
+    }
+
+    #[test]
+    fn service_with_oom_score_adj_runs() {
+        // positive oom_score_adj (more killable) needs no special capability
+        let mut svc = make_service_with_needs("oom_svc", &[], &[], "/usr/bin/true");
+        svc.resources = Some(crate::service::ResourcesSection { oom_score_adj: Some(100) });
+        let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
+        assert!(run_no_ready(graph, vec![svc]).is_ok());
     }
 }
