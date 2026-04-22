@@ -7,3 +7,6 @@ docs/superpowers/
 
 # Local test artifacts
 /tmp/flint-test/
+
+# Git worktrees
+.worktrees/
