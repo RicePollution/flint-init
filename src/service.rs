@@ -126,4 +126,15 @@ exec = "/bin/foo"
         assert_eq!(services.len(), 1);
         assert_eq!(services[0].service.name, "foo");
     }
+
+    #[test]
+    fn load_services_from_dir_errors_on_bad_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.toml");
+        std::fs::write(&path, "this is not valid toml ][").unwrap();
+        let result = load_services_from_dir(dir.path());
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("bad.toml"), "error should mention filename, got: {}", msg);
+    }
 }
