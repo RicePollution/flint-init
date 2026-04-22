@@ -14,15 +14,29 @@ use crate::service::ServiceDef;
 pub enum ExecutorError {
     #[error("fork failed: {0}")]
     Fork(#[from] nix::Error),
+    #[error("service '{0}' has empty exec string")]
+    EmptyExec(String),
 }
 
 fn spawn_service(def: &ServiceDef) -> Result<Pid, ExecutorError> {
-    let exec_path = CString::new(def.service.exec.as_str()).unwrap();
+    let parts: Vec<CString> = def
+        .service
+        .exec
+        .split_whitespace()
+        .map(|s| CString::new(s).unwrap())
+        .collect();
+
+    if parts.is_empty() {
+        return Err(ExecutorError::EmptyExec(def.service.name.clone()));
+    }
+
+    let exec_path = parts[0].clone();
 
     match unsafe { fork() }? {
         ForkResult::Parent { child } => Ok(child),
         ForkResult::Child => {
-            let _ = execv(&exec_path, &[exec_path.clone()]);
+            // Task 4 (oom_score_adj) will add resource-limit logic here.
+            let _ = execv(&exec_path, &parts);
             std::process::exit(127);
         }
     }
@@ -228,6 +242,23 @@ mod tests {
     fn run_no_ready(graph: ServiceGraph, services: Vec<ServiceDef>) -> Result<(), ExecutorError> {
         let (_, rx) = mpsc::channel();
         run(graph, services, rx)
+    }
+
+    #[test]
+    fn empty_exec_returns_error() {
+        // whitespace-only exec splits to nothing → EmptyExec error
+        let svc = make_service_with_needs("empty", &[], &[], "   ");
+        let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
+        let result = run_no_ready(graph, vec![svc]);
+        assert!(matches!(result, Err(ExecutorError::EmptyExec(_))));
+    }
+
+    #[test]
+    fn exec_with_args_runs_successfully() {
+        // /usr/bin/env passes its argument list to execvp; "env true" runs /usr/bin/true
+        let svc = make_service_with_needs("env_true", &[], &[], "/usr/bin/env true");
+        let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
+        assert!(run_no_ready(graph, vec![svc]).is_ok());
     }
 
     #[test]
