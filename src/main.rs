@@ -14,7 +14,7 @@ use service::{load_services_from_dir, ReadyStrategy};
 
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
-extern "C" fn handle_shutdown(_: libc::c_int) {
+extern "C" fn handle_shutdown(_: std::ffi::c_int) {
     SHUTDOWN.store(true, Ordering::SeqCst);
 }
 
