@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
@@ -53,6 +54,7 @@ pub fn run(
     mut graph: ServiceGraph,
     services: Vec<ServiceDef>,
     ready_rx: Receiver<String>,
+    shutdown: &AtomicBool,
 ) -> Result<(), ExecutorError> {
     use std::sync::mpsc::TryRecvError;
 
@@ -68,6 +70,14 @@ pub fn run(
     let mut completed = 0usize;
 
     loop {
+        // Graceful shutdown: SIGTERM all tracked children and exit.
+        if shutdown.load(Ordering::SeqCst) {
+            for pid in pid_to_name.keys() {
+                let _ = nix::sys::signal::kill(*pid, nix::sys::signal::Signal::SIGTERM);
+            }
+            break;
+        }
+
         // Drain inotify readiness signals
         loop {
             match ready_rx.try_recv() {
@@ -177,6 +187,7 @@ mod tests {
     use super::*;
     use crate::graph::ServiceGraph;
     use crate::service::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
 
     fn make_service(name: &str, after: &[&str], exec: &str) -> ServiceDef {
@@ -243,7 +254,27 @@ mod tests {
 
     fn run_no_ready(graph: ServiceGraph, services: Vec<ServiceDef>) -> Result<(), ExecutorError> {
         let (_, rx) = mpsc::channel();
-        run(graph, services, rx)
+        static NO_SHUTDOWN: AtomicBool = AtomicBool::new(false);
+        run(graph, services, rx, &NO_SHUTDOWN)
+    }
+
+    #[test]
+    fn shutdown_flag_terminates_long_running_service() {
+        use std::time::Duration;
+
+        static TEST_SHUTDOWN: AtomicBool = AtomicBool::new(false);
+        TEST_SHUTDOWN.store(false, Ordering::SeqCst);
+
+        std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(100));
+            TEST_SHUTDOWN.store(true, Ordering::SeqCst);
+        });
+
+        let svc = make_service_with_needs("sleeper", &[], &[], "/usr/bin/sleep 100");
+        let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
+        let (_, rx) = mpsc::channel();
+        let result = run(graph, vec![svc], rx, &TEST_SHUTDOWN);
+        assert!(result.is_ok());
     }
 
     #[test]

@@ -64,6 +64,7 @@ dependencies = [
  "anyhow",
  "bincode",
  "inotify",
+ "libc",
  "nix",
  "serde",
  "tempfile",

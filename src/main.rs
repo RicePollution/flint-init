@@ -4,13 +4,29 @@ mod ready;
 mod service;
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 
 use anyhow::{Context, Result};
+use nix::sys::signal::{signal, SigHandler, Signal};
 
 use service::{load_services_from_dir, ReadyStrategy};
 
+static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn handle_shutdown(_: libc::c_int) {
+    SHUTDOWN.store(true, Ordering::SeqCst);
+}
+
 fn main() -> Result<()> {
+    // Install signal handlers before starting any services.
+    unsafe {
+        signal(Signal::SIGTERM, SigHandler::Handler(handle_shutdown))
+            .context("failed to install SIGTERM handler")?;
+        signal(Signal::SIGINT, SigHandler::Handler(handle_shutdown))
+            .context("failed to install SIGINT handler")?;
+    }
+
     let args: Vec<String> = std::env::args().collect();
     let services_dir = args.get(1).map(String::as_str).unwrap_or("services/examples");
     let dir = Path::new(services_dir);
@@ -28,7 +44,6 @@ fn main() -> Result<()> {
     let graph =
         graph::ServiceGraph::build(services.clone()).context("building dependency graph")?;
 
-    // Spawn inotify watchers for all services with pidfile readiness
     let (ready_tx, ready_rx) = mpsc::channel::<String>();
 
     for svc in &services {
@@ -36,23 +51,18 @@ fn main() -> Result<()> {
             if r.strategy == ReadyStrategy::Pidfile {
                 if let Some(path) = &r.path {
                     let p = Path::new(path);
-                    // Ensure the parent directory exists so inotify can watch it
                     if let Some(parent) = p.parent() {
                         std::fs::create_dir_all(parent)
                             .with_context(|| format!("creating pidfile dir {:?}", parent))?;
                     }
-                    ready::watch_pidfile(
-                        p,
-                        ready_tx.clone(),
-                        svc.service.name.clone(),
-                    );
+                    ready::watch_pidfile(p, ready_tx.clone(), svc.service.name.clone());
                 }
             }
         }
     }
-    drop(ready_tx); // close sender so channel disconnects when all watchers finish
+    drop(ready_tx);
 
-    executor::run(graph, services, ready_rx).context("executor failed")?;
+    executor::run(graph, services, ready_rx, &SHUTDOWN).context("executor failed")?;
 
     Ok(())
 }
