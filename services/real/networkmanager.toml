@@ -1,0 +1,12 @@
+[service]
+name = "networkmanager"
+exec = "/usr/bin/NetworkManager --no-daemon"
+restart = "on-failure"
+
+[deps]
+after = ["dbus"]
+needs = ["dbus"]
+
+[ready]
+strategy = "pidfile"
+path = "/run/NetworkManager/NetworkManager.pid"

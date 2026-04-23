@@ -1,0 +1,11 @@
+[service]
+name = "delta"
+exec = "/home/keegan/Projects/flint-init/services/diamond/scripts/delta.sh"
+
+[deps]
+after = ["beta", "gamma"]
+needs = ["beta", "gamma"]
+
+[ready]
+strategy = "pidfile"
+path = "/tmp/flint-test/diamond/delta.pid"

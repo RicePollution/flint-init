@@ -1,5 +1,6 @@
 mod executor;
 mod graph;
+mod pid1;
 mod ready;
 mod service;
 
@@ -19,6 +20,8 @@ extern "C" fn handle_shutdown(_: std::ffi::c_int) {
 }
 
 fn main() -> Result<()> {
+    pid1::setup().context("pid1 setup failed")?;
+
     // Install signal handlers before starting any services.
     unsafe {
         signal(Signal::SIGTERM, SigHandler::Handler(handle_shutdown))
@@ -48,14 +51,19 @@ fn main() -> Result<()> {
 
     for svc in &services {
         if let Some(r) = &svc.ready {
-            if r.strategy == ReadyStrategy::Pidfile {
-                if let Some(path) = &r.path {
-                    let p = Path::new(path);
-                    if let Some(parent) = p.parent() {
-                        std::fs::create_dir_all(parent)
-                            .with_context(|| format!("creating pidfile dir {:?}", parent))?;
+            if let Some(path) = &r.path {
+                let p = Path::new(path);
+                if let Some(parent) = p.parent() {
+                    std::fs::create_dir_all(parent)
+                        .with_context(|| format!("creating ready dir {:?}", parent))?;
+                }
+                match r.strategy {
+                    ReadyStrategy::Pidfile => {
+                        ready::watch_pidfile(p, ready_tx.clone(), svc.service.name.clone());
                     }
-                    ready::watch_pidfile(p, ready_tx.clone(), svc.service.name.clone());
+                    ReadyStrategy::Socket => {
+                        ready::watch_socket(p, ready_tx.clone(), svc.service.name.clone());
+                    }
                 }
             }
         }
@@ -63,6 +71,10 @@ fn main() -> Result<()> {
     drop(ready_tx);
 
     executor::run(graph, services, ready_rx, &SHUTDOWN).context("executor failed")?;
+
+    if std::process::id() == 1 {
+        pid1::supervise_forever();
+    }
 
     Ok(())
 }

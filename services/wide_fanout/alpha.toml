@@ -1,0 +1,7 @@
+[service]
+name = "alpha"
+exec = "/home/keegan/Projects/flint-init/services/wide_fanout/scripts/alpha.sh"
+
+[ready]
+strategy = "pidfile"
+path = "/tmp/flint-test/wide_fanout/alpha.pid"

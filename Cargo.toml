@@ -10,7 +10,7 @@ path = "src/main.rs"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
-nix = { version = "0.29", features = ["process", "signal", "fs"] }
+nix = { version = "0.29", features = ["process", "signal", "fs", "mount", "reboot"] }
 inotify = "0.11"
 bincode = "1"
 thiserror = "1"

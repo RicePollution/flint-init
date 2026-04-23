@@ -9,8 +9,19 @@ use inotify::{EventMask, Inotify, WatchMask};
 pub fn watch_pidfile(path: &Path, tx: Sender<String>, service_name: String) -> JoinHandle<()> {
     let path = path.to_path_buf();
     thread::spawn(move || {
-        if watch_once(&path, &tx, &service_name).is_err() {
-            eprintln!("[ready] watcher for {} failed", service_name);
+        if watch_once(&path, &tx, &service_name, "pidfile").is_err() {
+            eprintln!("[ready] pidfile watcher for {} failed", service_name);
+        }
+    })
+}
+
+/// Spawn a thread that watches `path` for creation using inotify.
+/// When the socket file appears (or already exists), sends `service_name` on `tx`.
+pub fn watch_socket(path: &Path, tx: Sender<String>, service_name: String) -> JoinHandle<()> {
+    let path = path.to_path_buf();
+    thread::spawn(move || {
+        if watch_once(&path, &tx, &service_name, "socket").is_err() {
+            eprintln!("[ready] socket watcher for {} failed", service_name);
         }
     })
 }
@@ -19,9 +30,11 @@ fn watch_once(
     path: &PathBuf,
     tx: &Sender<String>,
     service_name: &str,
+    kind: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Fast path: file already exists.
     if path.exists() {
+        eprintln!("[ready] {} ready ({}): {:?}", service_name, kind, path);
         tx.send(service_name.to_string())?;
         return Ok(());
     }
@@ -37,6 +50,7 @@ fn watch_once(
 
     // Double-check after adding the watch to avoid TOCTOU race.
     if path.exists() {
+        eprintln!("[ready] {} ready ({}): {:?}", service_name, kind, path);
         tx.send(service_name.to_string())?;
         return Ok(());
     }
@@ -51,6 +65,7 @@ fn watch_once(
                         || event.mask.contains(EventMask::MOVED_TO)
                         || event.mask.contains(EventMask::CLOSE_WRITE))
                 {
+                    eprintln!("[ready] {} ready ({}): {:?}", service_name, kind, path);
                     tx.send(service_name.to_string())?;
                     return Ok(());
                 }

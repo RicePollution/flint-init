@@ -1,0 +1,11 @@
+[service]
+name = "epsilon"
+exec = "/home/keegan/Projects/flint-init/services/wide_fanout/scripts/epsilon.sh"
+
+[deps]
+after = ["alpha"]
+needs = ["alpha"]
+
+[ready]
+strategy = "pidfile"
+path = "/tmp/flint-test/wide_fanout/epsilon.pid"

@@ -1,0 +1,11 @@
+[service]
+name = "alpha"
+exec = "/home/keegan/Projects/flint-init/services/missing_dep/scripts/alpha.sh"
+
+[deps]
+after = ["nonexistent"]
+needs = ["nonexistent"]
+
+[ready]
+strategy = "pidfile"
+path = "/tmp/flint-test/missing_dep/alpha.pid"

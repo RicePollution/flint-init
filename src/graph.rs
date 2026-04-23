@@ -143,16 +143,8 @@ impl ServiceGraph {
         newly_ready
     }
 
-    pub fn get(&self, name: &str) -> Option<&ServiceDef> {
-        self.services.get(name)
-    }
-
     pub fn len(&self) -> usize {
         self.services.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.services.is_empty()
     }
 
     pub fn needs_dependents(&self, name: &str) -> &[String] {

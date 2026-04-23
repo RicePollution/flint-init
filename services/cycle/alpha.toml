@@ -1,0 +1,11 @@
+[service]
+name = "alpha"
+exec = "/home/keegan/Projects/flint-init/services/cycle/scripts/alpha.sh"
+
+[deps]
+after = ["beta"]
+needs = ["beta"]
+
+[ready]
+strategy = "pidfile"
+path = "/tmp/flint-test/cycle/alpha.pid"

@@ -1,0 +1,11 @@
+[service]
+name = "beta"
+exec = "/home/keegan/Projects/flint-init/services/deep_chain/scripts/beta.sh"
+
+[deps]
+after = ["alpha"]
+needs = ["alpha"]
+
+[ready]
+strategy = "pidfile"
+path = "/tmp/flint-test/deep_chain/beta.pid"

@@ -1,0 +1,7 @@
+[service]
+name = "alpha"
+exec = "/home/keegan/Projects/flint-init/services/deep_chain/scripts/alpha.sh"
+
+[ready]
+strategy = "pidfile"
+path = "/tmp/flint-test/deep_chain/alpha.pid"

@@ -1,0 +1,7 @@
+[service]
+name = "alpha"
+exec = "/home/keegan/Projects/flint-init/services/diamond/scripts/alpha.sh"
+
+[ready]
+strategy = "pidfile"
+path = "/tmp/flint-test/diamond/alpha.pid"
