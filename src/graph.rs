@@ -72,7 +72,8 @@ impl ServiceGraph {
         }
         for svc in &services {
             if let Some(deps) = &svc.deps {
-                for dep in &deps.needs {
+                let unique_needs: std::collections::HashSet<&String> = deps.needs.iter().collect();
+                for dep in unique_needs {
                     needs_dependents.entry(dep.clone()).or_default().push(svc.service.name.clone());
                 }
             }

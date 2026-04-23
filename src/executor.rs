@@ -122,6 +122,8 @@ pub fn run(
 
         // Wait up to 50 ms for a pidfile-ready signal, then poll children.
         // Using recv_timeout lets us wake as soon as a daemon writes its pidfile.
+        // NOTE: This call blocks up to 50ms, which is also the maximum shutdown reaction
+        // latency — the shutdown flag is only checked at the top of the next iteration.
         if let Ok(name) = ready_rx.recv_timeout(Duration::from_millis(50)) {
             if ready_reported.insert(name.clone()) {
                 eprintln!("[flint] ready (pidfile): {}", name);
