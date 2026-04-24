@@ -83,7 +83,7 @@ copy_binary /usr/bin/udevd           "$INITRAMFS_DIR/usr/bin"
 copy_binary /usr/bin/dbus-daemon     "$INITRAMFS_DIR/usr/bin"
 copy_binary /usr/bin/NetworkManager  "$INITRAMFS_DIR/usr/bin"
 copy_binary /bin/bash                "$INITRAMFS_DIR/bin"
-copy_binary /usr/bin/sleep           "$INITRAMFS_DIR/usr/bin"
+copy_binary /usr/bin/dbus-send       "$INITRAMFS_DIR/usr/bin"
 # nm-priv-helper: privilege-isolation helper required by NM 1.40+.
 # Lives in /usr/lib, not /usr/bin.
 copy_binary /usr/lib/nm-priv-helper  "$INITRAMFS_DIR/usr/lib"
@@ -96,8 +96,12 @@ cat > "$INITRAMFS_DIR/usr/lib/nm-priv-helper-wrapper" << 'WRAPPER'
 #!/bin/bash
 /usr/lib/nm-priv-helper &
 NM_PRIV_PID=$!
-# Give nm-priv-helper a moment to register its D-Bus name before NM starts.
-sleep 1
+# Poll until nm-priv-helper's D-Bus name is registered.
+until [[ $(dbus-send --system --dest=org.freedesktop.DBus --type=method_call \
+    --print-reply /org/freedesktop/DBus org.freedesktop.DBus.ListNames 2>/dev/null) \
+    == *nm_priv_helper* ]]; do
+    :
+done
 echo $NM_PRIV_PID > /run/nm-priv-helper.pid
 wait $NM_PRIV_PID
 WRAPPER
