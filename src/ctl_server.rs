@@ -93,8 +93,8 @@ fn handle_connection(stream: std::os::unix::net::UnixStream, shared: SharedState
             Err(e) => format!("{{\"error\":\"serialization failed: {}\"}}", e),
         };
         json.push('\n');
-        if writer.write_all(json.as_bytes()).is_err() {
-            break;
-        }
+        let _ = writer.write_all(json.as_bytes());
+        // One request per connection — close after sending the response.
+        break;
     }
 }
