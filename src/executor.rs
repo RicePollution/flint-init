@@ -8,8 +8,20 @@ use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{execv, fork, ForkResult, Pid};
 use thiserror::Error;
 
+use crate::ctl_proto::{self, SharedState};
 use crate::graph::ServiceGraph;
-use crate::service::ServiceDef;
+use crate::service::{RestartPolicy, ServiceDef};
+
+const MAX_RESTARTS: u32 = 5;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ServiceState {
+    Pending,
+    Running(Pid),
+    Ready,
+    Exited { code: i32 },
+    Failed,
+}
 
 #[derive(Debug, Error)]
 pub enum ExecutorError {
@@ -45,6 +57,47 @@ fn spawn_service(def: &ServiceDef) -> Result<Pid, ExecutorError> {
     }
 }
 
+/// Decide whether to restart a service after it exits with the given code.
+/// Returns false during shutdown to prevent unnecessary respawning.
+fn should_restart(policy: Option<&RestartPolicy>, code: i32, is_signal: bool) -> bool {
+    match policy {
+        Some(RestartPolicy::Always) => true,
+        Some(RestartPolicy::OnFailure) => code != 0 || is_signal,
+        _ => false,
+    }
+}
+
+fn sync_state(shared: &SharedState, name: &str, svc_state: &ServiceState) {
+    if let Ok(mut map) = shared.lock() {
+        let info = map.entry(name.to_string()).or_insert_with(|| ctl_proto::ServiceInfo {
+            name: name.to_string(),
+            state: "pending".to_string(),
+            pid: None,
+        });
+        match svc_state {
+            ServiceState::Pending => {
+                info.state = "pending".to_string();
+                info.pid = None;
+            }
+            ServiceState::Running(pid) => {
+                info.state = "running".to_string();
+                info.pid = Some(pid.as_raw() as u32);
+            }
+            ServiceState::Ready => {
+                info.state = "ready".to_string();
+            }
+            ServiceState::Exited { .. } => {
+                info.state = "exited".to_string();
+                info.pid = None;
+            }
+            ServiceState::Failed => {
+                info.state = "failed".to_string();
+                info.pid = None;
+            }
+        }
+    }
+}
+
 /// Run all services in dependency order.
 ///
 /// `ready_rx`: receives service names from inotify watchers when a pidfile appears.
@@ -55,6 +108,7 @@ pub fn run(
     services: Vec<ServiceDef>,
     ready_rx: Receiver<String>,
     shutdown: &AtomicBool,
+    shared: SharedState,
 ) -> Result<(), ExecutorError> {
     use std::sync::mpsc::TryRecvError;
 
@@ -64,6 +118,16 @@ pub fn run(
     let mut pid_to_name: HashMap<Pid, String> = HashMap::new();
     let mut ready_reported: HashSet<String> = HashSet::new();
     let mut blocked_services: HashSet<String> = HashSet::new();
+    let mut restart_counts: HashMap<String, u32> = HashMap::new();
+    let mut service_states: HashMap<String, ServiceState> = svc_by_name
+        .keys()
+        .map(|n| (n.clone(), ServiceState::Pending))
+        .collect();
+
+    // Initialise shared state with Pending for all services.
+    for name in service_states.keys() {
+        sync_state(&shared, name, &ServiceState::Pending);
+    }
 
     let mut to_start = graph.initially_ready();
     let total = graph.len();
@@ -84,6 +148,8 @@ pub fn run(
                 Ok(name) => {
                     if ready_reported.insert(name.clone()) {
                         eprintln!("[flint] ready (pidfile): {}", name);
+                        service_states.insert(name.clone(), ServiceState::Ready);
+                        sync_state(&shared, &name, &ServiceState::Ready);
                         let newly = graph.mark_ready(&name);
                         to_start.extend(newly);
                     }
@@ -97,6 +163,8 @@ pub fn run(
         while let Some(name) = to_start.pop() {
             if blocked_services.contains(&name) {
                 eprintln!("[flint] blocked: {}", name);
+                service_states.insert(name.clone(), ServiceState::Failed);
+                sync_state(&shared, &name, &ServiceState::Failed);
                 for dep in graph.needs_dependents(&name) {
                     blocked_services.insert(dep.clone());
                 }
@@ -108,6 +176,8 @@ pub fn run(
             if let Some(def) = svc_by_name.get(&name) {
                 eprintln!("[flint] starting: {}", name);
                 let pid = spawn_service(def)?;
+                service_states.insert(name.clone(), ServiceState::Running(pid));
+                sync_state(&shared, &name, &ServiceState::Running(pid));
                 pid_to_name.insert(pid, name);
             }
         }
@@ -127,6 +197,8 @@ pub fn run(
         if let Ok(name) = ready_rx.recv_timeout(Duration::from_millis(50)) {
             if ready_reported.insert(name.clone()) {
                 eprintln!("[flint] ready (pidfile): {}", name);
+                service_states.insert(name.clone(), ServiceState::Ready);
+                sync_state(&shared, &name, &ServiceState::Ready);
                 let newly = graph.mark_ready(&name);
                 to_start.extend(newly);
             }
@@ -140,30 +212,76 @@ pub fn run(
                 Ok(WaitStatus::Exited(pid, code)) => {
                     if let Some(name) = pid_to_name.remove(&pid) {
                         eprintln!("[flint] exited: {} (code={})", name, code);
-                        completed += 1;
-                        if code != 0 && !ready_reported.contains(&name) {
-                            for dep in graph.needs_dependents(&name) {
-                                blocked_services.insert(dep.clone());
+                        let policy = svc_by_name.get(&name).and_then(|d| d.service.restart.as_ref());
+                        let count = restart_counts.entry(name.clone()).or_insert(0);
+                        if should_restart(policy, code, false)
+                            && *count < MAX_RESTARTS
+                            && !shutdown.load(Ordering::SeqCst)
+                        {
+                            *count += 1;
+                            eprintln!("[flint] restarting: {} (attempt {}/{})", name, count, MAX_RESTARTS);
+                            let new_pid = spawn_service(svc_by_name.get(&name).unwrap())?;
+                            service_states.insert(name.clone(), ServiceState::Running(new_pid));
+                            sync_state(&shared, &name, &ServiceState::Running(new_pid));
+                            pid_to_name.insert(new_pid, name);
+                        } else {
+                            let exhausted = should_restart(policy, code, false) && *count >= MAX_RESTARTS;
+                            let failed = exhausted || code != 0;
+                            if exhausted {
+                                eprintln!("[flint] failed: {} (max restarts exceeded)", name);
+                                service_states.insert(name.clone(), ServiceState::Failed);
+                                sync_state(&shared, &name, &ServiceState::Failed);
+                            } else {
+                                service_states.insert(name.clone(), ServiceState::Exited { code });
+                                sync_state(&shared, &name, &ServiceState::Exited { code });
                             }
-                        }
-                        if ready_reported.insert(name.clone()) {
-                            let newly = graph.mark_ready(&name);
-                            to_start.extend(newly);
+                            completed += 1;
+                            if failed && !ready_reported.contains(&name) {
+                                for dep in graph.needs_dependents(&name) {
+                                    blocked_services.insert(dep.clone());
+                                }
+                            }
+                            if ready_reported.insert(name.clone()) {
+                                let newly = graph.mark_ready(&name);
+                                to_start.extend(newly);
+                            }
                         }
                     }
                 }
                 Ok(WaitStatus::Signaled(pid, sig, _)) => {
                     if let Some(name) = pid_to_name.remove(&pid) {
                         eprintln!("[flint] killed: {} (signal={:?})", name, sig);
-                        completed += 1;
-                        if !ready_reported.contains(&name) {
-                            for dep in graph.needs_dependents(&name) {
-                                blocked_services.insert(dep.clone());
+                        let policy = svc_by_name.get(&name).and_then(|d| d.service.restart.as_ref());
+                        let count = restart_counts.entry(name.clone()).or_insert(0);
+                        if should_restart(policy, 1, true)
+                            && *count < MAX_RESTARTS
+                            && !shutdown.load(Ordering::SeqCst)
+                        {
+                            *count += 1;
+                            eprintln!("[flint] restarting: {} (attempt {}/{})", name, count, MAX_RESTARTS);
+                            let new_pid = spawn_service(svc_by_name.get(&name).unwrap())?;
+                            service_states.insert(name.clone(), ServiceState::Running(new_pid));
+                            sync_state(&shared, &name, &ServiceState::Running(new_pid));
+                            pid_to_name.insert(new_pid, name);
+                        } else {
+                            if should_restart(policy, 1, true) && *count >= MAX_RESTARTS {
+                                eprintln!("[flint] failed: {} (max restarts exceeded)", name);
+                                service_states.insert(name.clone(), ServiceState::Failed);
+                                sync_state(&shared, &name, &ServiceState::Failed);
+                            } else {
+                                service_states.insert(name.clone(), ServiceState::Exited { code: -1 });
+                                sync_state(&shared, &name, &ServiceState::Exited { code: -1 });
                             }
-                        }
-                        if ready_reported.insert(name.clone()) {
-                            let newly = graph.mark_ready(&name);
-                            to_start.extend(newly);
+                            completed += 1;
+                            if !ready_reported.contains(&name) {
+                                for dep in graph.needs_dependents(&name) {
+                                    blocked_services.insert(dep.clone());
+                                }
+                            }
+                            if ready_reported.insert(name.clone()) {
+                                let newly = graph.mark_ready(&name);
+                                to_start.extend(newly);
+                            }
                         }
                     }
                 }
@@ -232,6 +350,31 @@ mod tests {
         }
     }
 
+    fn make_service_with_restart(
+        name: &str,
+        exec: &str,
+        needs: &[&str],
+        restart: RestartPolicy,
+    ) -> ServiceDef {
+        ServiceDef {
+            service: ServiceSection {
+                name: name.to_string(),
+                exec: exec.to_string(),
+                restart: Some(restart),
+            },
+            deps: if needs.is_empty() {
+                None
+            } else {
+                Some(DepsSection {
+                    after: vec![],
+                    needs: needs.iter().map(|s| s.to_string()).collect(),
+                })
+            },
+            ready: None,
+            resources: None,
+        }
+    }
+
     #[test]
     fn failed_needs_dep_does_not_hang() {
         // "fail" exits 1; "blocked" needs "fail" → should be skipped, not hang
@@ -257,7 +400,7 @@ mod tests {
     fn run_no_ready(graph: ServiceGraph, services: Vec<ServiceDef>) -> Result<(), ExecutorError> {
         let (_, rx) = mpsc::channel();
         static NO_SHUTDOWN: AtomicBool = AtomicBool::new(false);
-        run(graph, services, rx, &NO_SHUTDOWN)
+        run(graph, services, rx, &NO_SHUTDOWN, crate::ctl_proto::new_shared_state())
     }
 
     #[test]
@@ -275,7 +418,7 @@ mod tests {
         let svc = make_service_with_needs("sleeper", &[], &[], "/usr/bin/sleep 100");
         let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
         let (_, rx) = mpsc::channel();
-        let result = run(graph, vec![svc], rx, &TEST_SHUTDOWN);
+        let result = run(graph, vec![svc], rx, &TEST_SHUTDOWN, crate::ctl_proto::new_shared_state());
         assert!(result.is_ok());
     }
 
@@ -320,5 +463,87 @@ mod tests {
         svc.resources = Some(crate::service::ResourcesSection { oom_score_adj: Some(100) });
         let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
         assert!(run_no_ready(graph, vec![svc]).is_ok());
+    }
+
+    // --- Restart logic tests ---
+
+    #[test]
+    fn on_failure_restart_respawns_service() {
+        // Write a script that appends to a count file then exits 1.
+        // After MAX_RESTARTS exhausted, run() should complete and we should
+        // see MAX_RESTARTS+1 executions (initial + 5 retries).
+        let dir = tempfile::tempdir().unwrap();
+        let count_file = dir.path().join("count");
+        let script_file = dir.path().join("script.sh");
+        std::fs::write(
+            &script_file,
+            format!("#!/bin/sh\necho x >> {}\nexit 1\n", count_file.display()),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script_file, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let exec = format!("/bin/sh {}", script_file.display());
+        let svc = make_service_with_restart("failing", &exec, &[], RestartPolicy::OnFailure);
+        let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
+        run_no_ready(graph, vec![svc]).unwrap();
+
+        let content = std::fs::read_to_string(&count_file).unwrap_or_default();
+        assert_eq!(
+            content.lines().count(),
+            (MAX_RESTARTS + 1) as usize,
+            "expected {} executions (1 initial + {} restarts)",
+            MAX_RESTARTS + 1,
+            MAX_RESTARTS
+        );
+    }
+
+    #[test]
+    fn restart_never_does_not_respawn() {
+        // With restart=never a failing service should run exactly once.
+        let dir = tempfile::tempdir().unwrap();
+        let count_file = dir.path().join("count");
+        let script_file = dir.path().join("script.sh");
+        std::fs::write(
+            &script_file,
+            format!("#!/bin/sh\necho x >> {}\nexit 1\n", count_file.display()),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script_file, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let exec = format!("/bin/sh {}", script_file.display());
+        let svc = make_service_with_restart("failing-never", &exec, &[], RestartPolicy::Never);
+        let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
+        run_no_ready(graph, vec![svc]).unwrap();
+
+        let content = std::fs::read_to_string(&count_file).unwrap_or_default();
+        assert_eq!(content.lines().count(), 1, "restart=never should run exactly once");
+    }
+
+    #[test]
+    fn max_restarts_exhausted_terminates_without_hang() {
+        // restart=always with /usr/bin/false: should exhaust MAX_RESTARTS and complete.
+        let svc = make_service_with_restart("always-fail", "/usr/bin/false", &[], RestartPolicy::Always);
+        let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
+        assert!(run_no_ready(graph, vec![svc]).is_ok());
+    }
+
+    #[test]
+    fn needs_dependent_of_permanently_failed_service_is_blocked() {
+        // "base" has restart=on-failure and always exits 1 → exhausts restarts → Failed.
+        // "dependent" needs "base" → must be blocked, not hang.
+        let dir = tempfile::tempdir().unwrap();
+        let script_file = dir.path().join("script.sh");
+        std::fs::write(&script_file, "#!/bin/sh\nexit 1\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script_file, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let exec = format!("/bin/sh {}", script_file.display());
+        let base = make_service_with_restart("base", &exec, &[], RestartPolicy::OnFailure);
+        let dep = make_service_with_needs("dependent", &[], &["base"], "/usr/bin/true");
+        let services = vec![base, dep];
+        let graph = ServiceGraph::build(services.clone()).unwrap();
+        assert!(run_no_ready(graph, services).is_ok());
     }
 }

@@ -1,3 +1,5 @@
+mod ctl_proto;
+mod ctl_server;
 mod executor;
 mod graph;
 mod pid1;
@@ -47,6 +49,9 @@ fn main() -> Result<()> {
     let graph =
         graph::ServiceGraph::build(services.clone()).context("building dependency graph")?;
 
+    let shared = ctl_proto::new_shared_state();
+    ctl_server::start(shared.clone());
+
     let (ready_tx, ready_rx) = mpsc::channel::<String>();
 
     for svc in &services {
@@ -70,7 +75,7 @@ fn main() -> Result<()> {
     }
     drop(ready_tx);
 
-    executor::run(graph, services, ready_rx, &SHUTDOWN).context("executor failed")?;
+    executor::run(graph, services, ready_rx, &SHUTDOWN, shared).context("executor failed")?;
 
     if std::process::id() == 1 {
         pid1::supervise_forever();

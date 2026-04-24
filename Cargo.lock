@@ -66,6 +66,7 @@ dependencies = [
  "inotify",
  "nix",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "toml",
