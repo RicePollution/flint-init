@@ -1,11 +1,11 @@
 [service]
 name = "networkmanager"
-exec = "/usr/bin/NetworkManager --no-daemon"
+exec = "/usr/bin/NetworkManager --pid-file=/run/NetworkManager/NetworkManager.pid"
 restart = "on-failure"
 
 [deps]
-after = ["dbus"]
-needs = ["dbus"]
+after = ["nm-priv-helper"]
+needs = ["nm-priv-helper"]
 
 [ready]
 strategy = "pidfile"

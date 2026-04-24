@@ -1,0 +1,12 @@
+[service]
+name = "nm-priv-helper"
+exec = "/usr/lib/nm-priv-helper-wrapper"
+restart = "on-failure"
+
+[deps]
+after = ["dbus"]
+needs = ["dbus"]
+
+[ready]
+strategy = "pidfile"
+path = "/run/nm-priv-helper.pid"

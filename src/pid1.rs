@@ -35,16 +35,31 @@ pub fn setup() -> Result<()> {
     )
     .context("mount /sys")?;
 
-    // /dev — tmpfs (udev will populate it)
+    // /dev — tmpfs (udev will populate it).
+    // When CONFIG_DEVTMPFS_MOUNT=y the kernel mounts devtmpfs before exec'ing
+    // init, so we get EBUSY here — that is fine, skip the mount.
     std::fs::create_dir_all("/dev").context("create /dev")?;
-    mount(
+    match mount(
         Some("devtmpfs"),
         "/dev",
         Some("devtmpfs"),
         MsFlags::empty(),
         None::<&str>,
-    )
-    .context("mount /dev")?;
+    ) {
+        Ok(()) => {}
+        Err(nix::Error::EBUSY) => {
+            eprintln!("[pid1] /dev already mounted by kernel (DEVTMPFS_MOUNT=y), skipping");
+        }
+        Err(e) => return Err(e).context("mount /dev")?,
+    }
+
+    // Standard /dev symlinks — mkinitcpio creates these in its init hooks;
+    // we must do it ourselves since we bypass that layer.
+    // Without /dev/stdout the NM logging backend silently falls back to syslog.
+    let _ = std::os::unix::fs::symlink("/proc/self/fd", "/dev/fd");
+    let _ = std::os::unix::fs::symlink("/proc/self/fd/0", "/dev/stdin");
+    let _ = std::os::unix::fs::symlink("/proc/self/fd/1", "/dev/stdout");
+    let _ = std::os::unix::fs::symlink("/proc/self/fd/2", "/dev/stderr");
 
     eprintln!("[pid1] mounted /proc, /sys, /dev");
     Ok(())
