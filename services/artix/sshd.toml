@@ -1,0 +1,7 @@
+[service]
+name = "sshd"
+exec = "/usr/bin/sshd -D -e"
+restart = "on-failure"
+
+[deps]
+needs = ["dbus"]

@@ -1,6 +1,7 @@
 mod ctl_proto;
 mod ctl_server;
 mod executor;
+mod fstab;
 mod graph;
 mod pid1;
 mod ready;
@@ -33,7 +34,12 @@ fn main() -> Result<()> {
     }
 
     let args: Vec<String> = std::env::args().collect();
-    let services_dir = args.get(1).map(String::as_str).unwrap_or("services/examples");
+    let default_dir = if std::process::id() == 1 {
+        "/etc/flint/services"
+    } else {
+        "services/examples"
+    };
+    let services_dir = args.get(1).map(String::as_str).unwrap_or(default_dir);
     let dir = Path::new(services_dir);
 
     let services = load_services_from_dir(dir)

@@ -1,0 +1,8 @@
+[service]
+name = "dbus"
+exec = "/usr/bin/dbus-daemon --system --nofork --nopidfile"
+restart = "on-failure"
+
+[ready]
+strategy = "socket"
+path = "/run/dbus/system_bus_socket"

@@ -1,0 +1,8 @@
+[service]
+name = "syslog-ng"
+exec = "/usr/bin/syslog-ng --foreground"
+restart = "on-failure"
+
+[ready]
+strategy = "pidfile"
+path = "/run/syslog-ng/syslog-ng.pid"
