@@ -57,3 +57,6 @@ cp "$REPO_ROOT/services/artix/"*.toml "$ROOT/etc/flint/services/"
 echo "[install] installed:"
 ls -la "$ROOT/usr/sbin/flint-init" "$ROOT/usr/bin/flint-ctl"
 ls "$ROOT/etc/flint/services/"
+
+# Flush all writes to disk before the caller unmounts.
+sync
