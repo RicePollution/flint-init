@@ -1,87 +1,127 @@
 # flint-init
 
-A parallel-first init system for Linux desktops.
+A parallel-first init system for Linux. Replaces OpenRC/SysV on desktops and servers
+with a dependency-DAG supervisor that starts each service the instant its dependencies
+are satisfied — not in waves.
 
-## The Problem
+Licensed under the [GNU General Public License v2.0](LICENSE).
 
-Modern Linux desktop boots are slower than they need to be. Init systems like OpenRC
-start services sequentially or in coarse waves, wait for scripts to exit rather than
-checking if services are actually ready, and fork a shell for every service invocation.
+---
 
-The result: services that could start in parallel sit idle waiting for an entire wave
-to finish, and a service that starts quickly doesn't unlock its dependents until the
-slowest sibling in its wave catches up.
+## The Problem with Wave-Based Init
 
-## What flint-init Does Differently
-
-**True per-service parallelism.** Services are nodes in a dependency DAG. Any service
-whose dependencies are satisfied starts immediately — no wave boundaries.
-
-**Real readiness detection.** A service is "ready" when it creates its pidfile or
-socket, not when its launcher script exits. flint-init uses Linux inotify to react
-the instant readiness is signalled, with no polling. For socket readiness, a connection
-probe confirms the socket is actually accepting before unblocking dependents.
-
-**Direct execution.** No shell fork per service. flint-init calls `execve` directly.
-
-**Service restart.** Services with `restart = "on-failure"` or `restart = "always"` are
-automatically respawned (up to 5 attempts). Permanently-failed services propagate failure
-to their `needs`-dependents rather than blocking the boot indefinitely.
-
-**Live status via flint-ctl.** A Unix socket at `/run/flint/ctl.sock` exposes service
-state to the `flint-ctl` CLI. Query status or stop services while flint-init is running.
-
-## Roadmap
-
-| Stage | Description | Status |
-|-------|-------------|--------|
-| 1 | DAG executor, inotify readiness, parallel service spawning | Complete |
-| 2 | PID 1 handoff, real service definitions, QEMU boot | Complete |
-| 3 | Service restart logic, socket connection probing, flint-ctl | Complete |
-| 4 | TBD | In progress |
-
-## Stage 3 — Restart, Socket Probing, flint-ctl (v0.3.0)
-
-### Service restart
-
-Services are respawned according to their restart policy. `on-failure` restarts on
-nonzero exit; `always` restarts unconditionally. After 5 failed attempts the service is
-marked `Failed` and any `needs`-dependents are blocked.
-
-QEMU test output showing a service failing twice then succeeding on attempt 3:
+OpenRC and similar systems divide services into runlevels or waves. Every service in a
+wave must finish before the next wave begins. This means a fast service (dbus, 80ms)
+sits idle waiting for the slowest service in its wave to complete before any of its
+dependents can start.
 
 ```
-[flint] starting: restart-svc
-[restart-test] attempt 1: FAILING (exit 1)
-[flint] exited: restart-svc (code=1)
-[flint] restarting: restart-svc (attempt 1/5)
-[restart-test] attempt 2: FAILING (exit 1)
-[flint] exited: restart-svc (code=1)
-[flint] restarting: restart-svc (attempt 2/5)
-[restart-test] attempt 3: SUCCESS (exit 0)
-[flint] exited: restart-svc (code=0)
+OpenRC wave model:
+  Wave 1: [udev .............. 800ms] [syslog .... 200ms] [←waits for udev]
+  Wave 2: [dbus . 80ms] [←waits for all of wave 1 to finish]
+  Wave 3: [NetworkManager] [sshd] [←wait for all of wave 2]
+
+Total: ~800ms (wave 1) + 80ms (wave 2) + NM startup = sequential bottleneck
 ```
 
-### Socket connection probing
+```
+flint-init DAG model:
+  t=0ms:    udev starts, syslog starts (no deps)
+  t=200ms:  syslog signals ready (pidfile created)
+  t=800ms:  udev signals ready (socket appears)
+  t=800ms:  dbus starts immediately (dep satisfied)
+  t=880ms:  dbus signals ready (socket accepting connections)
+  t=880ms:  NetworkManager + sshd start immediately
 
-`watch_socket` now calls `probe_unix_socket` after inotify fires: it loops
-`UnixStream::connect` until success or a 5-second timeout. This prevents a service
-from being declared ready the instant the socket file appears but before the daemon
-is actually accepting. Fail-open: if the probe times out a warning is logged and
-readiness is signalled anyway.
+Total: driven by the critical path, not the slowest sibling in each wave
+```
 
-### flint-ctl
+On a DAG with parallel independent services, flint-init eliminates all wave-boundary
+delays. The only mandatory wait is along the actual dependency chain.
 
-A control socket at `/run/flint/ctl.sock` accepts line-oriented JSON commands.
-The `flint-ctl` binary wraps it with a simple CLI:
+---
+
+## How It Works
+
+### 1. Dependency DAG
+
+Service definitions are TOML files in `/etc/flint/services/`. At startup flint-init
+reads them all, builds a directed acyclic graph, and computes per-service in-degree
+counts. Services with in-degree zero (no unsatisfied dependencies) are started
+immediately.
+
+```toml
+[service]
+name = "networkmanager"
+exec = "/usr/bin/NetworkManager"
+restart = "on-failure"
+
+[deps]
+needs = ["dbus"]   # hard dependency — NM fails if dbus fails
+
+[ready]
+strategy = "pidfile"
+path = "/run/NetworkManager/NetworkManager.pid"
+```
+
+Two dependency types:
+- `needs`: hard — if the dependency permanently fails, this service is also marked failed
+- `after`: ordering only — start after, but don't require the dependency to succeed
+
+### 2. Inotify Readiness Detection
+
+A service is ready when it says it is — not when a launcher script exits. flint-init
+watches the parent directory of each readiness path via Linux inotify and reacts the
+instant the file appears. Zero polling. Zero sleep loops.
+
+Two readiness strategies:
+- `pidfile`: ready when the pidfile is created
+- `socket`: ready when the socket file appears **and** a connection probe succeeds
+  (loops `UnixStream::connect` for up to 5 seconds to confirm the daemon is accepting)
+
+When a service signals ready, its dependents' in-degree counters are decremented. Any
+that reach zero join the run queue immediately.
+
+### 3. Direct Execution
+
+flint-init calls `fork` + `execve` directly. No shell is forked per service. Each
+service process is a direct child of the supervisor with a known PID, tracked for
+SIGCHLD/waitpid.
+
+### 4. Restart Logic
+
+Services declare their restart policy:
+
+| Policy | Behaviour |
+|--------|-----------|
+| `always` | Respawn unconditionally on exit |
+| `on-failure` | Respawn only on nonzero exit code |
+| `never` | Do not respawn |
+
+After 5 failed restart attempts the service is permanently marked `Failed`. Any service
+that `needs` a permanently-failed service is also marked `Failed` rather than waiting
+forever.
+
+### 5. PID 1 Duties
+
+When running as PID 1, flint-init:
+- Mounts `/proc`, `/sys`, `/dev` (devtmpfs)
+- Parses `/etc/fstab` and mounts remaining real filesystems (skips root, virtual types)
+- After all services exit: lazy-unmounts all real filesystems, calls `sync`, then halts or reboots
+
+### 6. flint-ctl
+
+A control socket at `/run/flint/ctl.sock` exposes live state via line-oriented JSON.
 
 ```
 $ flint-ctl status
 {
   "services": [
-    { "name": "restart-svc", "state": "exited", "pid": null },
-    { "name": "ctl-test",    "state": "running", "pid": 63 },
-    { "name": "a",           "state": "exited",  "pid": null }
+    { "name": "dbus",           "state": "ready",   "pid": 75  },
+    { "name": "networkmanager", "state": "running",  "pid": 82  },
+    { "name": "sshd",           "state": "running",  "pid": 91  },
+    { "name": "syslog-ng",      "state": "running",  "pid": 68  },
+    { "name": "agetty",         "state": "running",  "pid": 103 }
   ]
 }
 
@@ -91,107 +131,110 @@ $ flint-ctl stop networkmanager
 
 ---
 
-## Stage 2 — QEMU Boot (v0.2.1)
+## Real Boot — Stage 4 (v0.4.0)
 
-flint-init boots a real Linux initramfs in QEMU as PID 1, starting and coordinating
-four real Artix Linux daemons in dependency order:
-
-```
-udev → dbus → nm-priv-helper → NetworkManager
-```
-
-Console output from a successful boot:
+flint-init booted a real Artix Linux QEMU disk image as PID 1, replacing OpenRC,
+with five real daemons managed from `/etc/flint/services/`:
 
 ```
+[pid1] /dev already mounted by kernel (DEVTMPFS_MOUNT=y), skipping
 [pid1] mounted /proc, /sys, /dev
-[flint] loaded 4 service(s)
-[flint] starting: udev
-[ready] udev ready (socket): "/run/udev/control"
-[flint] ready (pidfile): udev
+[flint] loaded 5 service(s)
+[ctl] listening on /run/flint/ctl.sock
+[flint] starting: syslog-ng
 [flint] starting: dbus
+[flint] starting: agetty
+[ready] dbus socket accepting connections: "/run/dbus/system_bus_socket"
 [ready] dbus ready (socket): "/run/dbus/system_bus_socket"
-[flint] ready (pidfile): dbus
-[flint] starting: nm-priv-helper
-[ready] nm-priv-helper ready (pidfile): "/run/nm-priv-helper.pid"
-[flint] ready (pidfile): nm-priv-helper
+[flint] starting: sshd
 [flint] starting: networkmanager
-[ready] networkmanager ready (pidfile): "/run/NetworkManager/NetworkManager.pid"
-[flint] ready (pidfile): networkmanager
-[pid1] FLINT_ON_EXIT=halt — halting
+Server listening on :: port 22.
+Server listening on 0.0.0.0 port 22.
+
+Artix Linux 6.19.11-artix1-1 (ttyS0)
+
+artixlinux login: root (automatic login)
 ```
 
-Each service starts the instant its dependencies signal ready. No waves, no polling.
-
-### What was fixed to make this work
-
-**`/dev/stdout` missing from devtmpfs.**
-`mkinitcpio` normally creates `/dev/stdout → /proc/self/fd/1` as part of its init
-hooks. We don't run those hooks. Without it, any service configured to log to stdout
-silently falls back to syslog. Added the standard `/dev/fd`, `/dev/stdin`,
-`/dev/stdout`, `/dev/stderr` symlinks to `pid1::setup()`.
-
-**NetworkManager doesn't write its pidfile in `--no-daemon` mode.**
-When daemonizing normally, NM forks, the daemon writes the pidfile, the parent exits.
-With `--no-daemon` in NM 1.56 the foreground process doesn't write it. Removed
-`--no-daemon` from the service definition.
-
-**nm-priv-helper can't be activated via D-Bus.**
-NM 1.40+ requires `nm-priv-helper`. D-Bus would normally activate it via
-`/usr/lib/dbus-daemon-launch-helper`, but that binary is setuid and unreadable — it
-cannot be copied into an initramfs. Every activation entry also carries a
-`SystemdService=` field which causes dbus-daemon to contact a non-existent systemd
-and hang indefinitely.
-
-Fix: `nm-priv-helper` is added as its own flint-init service. A bash wrapper launches
-it in the background, waits for it to register its D-Bus name, writes a pidfile, then
-waits for the process. By the time NetworkManager starts, nm-priv-helper is already
-registered — no D-Bus activation needed.
-
-**D-Bus activation entries with `SystemdService=`.**
-The entire `/usr/share/dbus-1/system-services/` directory is removed from the
-initramfs so activation attempts immediately return an error rather than hanging.
-
-**dbus-daemon privilege drop.**
-`<user>dbus</user>` is removed from `system.conf` so dbus-daemon stays root, which
-also satisfies the D-Bus policy that only root can own `org.freedesktop.nm_priv_helper`.
+syslog-ng, dbus, agetty, sshd, and NetworkManager all start in parallel where their
+deps allow. sshd and NetworkManager both unblock the moment dbus is ready — they don't
+wait for each other.
 
 ---
 
-## Service Definition Format
+## Stage History
 
-```toml
-[service]
-name = "networkmanager"
-exec = "/usr/sbin/NetworkManager"
-restart = "on-failure"
+| Stage | Description | Version | Status |
+|-------|-------------|---------|--------|
+| 1 | DAG executor, inotify readiness, parallel service spawning, 41 tests | v0.1.x | Complete |
+| 2 | PID 1 handoff, real service definitions, QEMU initramfs boot | v0.2.x | Complete |
+| 3 | Service restart logic, socket connection probing, flint-ctl | v0.3.x | Complete |
+| 4 | fstab mounts, graceful unmount, real Artix disk image boot | v0.4.x | Complete |
 
-[deps]
-after = ["dbus", "udev"]
-needs = ["dbus"]
-
-[ready]
-strategy = "pidfile"
-path = "/run/NetworkManager.pid"
-
-[resources]
-oom_score_adj = -100
-```
+---
 
 ## Building
 
 ```bash
-cargo build
+cargo build --release
 cargo test
+```
+
+Requirements: Rust 1.75+, Linux (uses inotify, fork/exec, nix syscalls).
+
+## Running the Test Suite
+
+```bash
+cargo test   # 41 unit + integration tests, no root required
 ```
 
 ## QEMU Tests
 
 ```bash
-# Full real-service boot (udev, dbus, nm-priv-helper, NetworkManager):
+# Initramfs boot — udev, dbus, nm-priv-helper, NetworkManager:
 bash scripts/qemu-test.sh
 
-# Stage 3 integration test (restart logic + flint-ctl, no real daemons):
+# Stage 3 integration — restart logic + flint-ctl:
 bash scripts/qemu-stage3-test.sh
+
+# Stage 4 — full Artix disk image (requires creating the image first):
+sudo bash scripts/create-artix-vm.sh     # one-time, ~5 min
+bash scripts/boot-artix-vm.sh            # boots and tails serial log
 ```
 
-Requirements: `cargo`, `qemu-system-x86_64`, `cpio`, `gzip`, `ldd`.
+## Service Definition Reference
+
+```toml
+[service]
+name = "example"
+exec = "/usr/bin/example --foreground"
+restart = "on-failure"   # "always" | "on-failure" | "never"
+
+[deps]
+after = ["syslog-ng"]    # start after, don't require success
+needs = ["dbus"]         # hard dep — fail if dbus fails
+
+[ready]
+strategy = "pidfile"     # "pidfile" | "socket"
+path = "/run/example.pid"
+
+[resources]
+oom_score_adj = -100
+```
+
+---
+
+## License
+
+Copyright (C) 2026 RicePollution
+
+This program is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software Foundation,
+either version 2 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this
+program. If not, see <https://www.gnu.org/licenses/>.

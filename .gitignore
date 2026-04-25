@@ -10,3 +10,8 @@ docs/superpowers/
 
 # Git worktrees
 .worktrees/
+
+# VM disk images — too large for GitHub (>100MB)
+*.qcow2
+*.raw
+*.img
