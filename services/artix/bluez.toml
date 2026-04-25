@@ -1,0 +1,11 @@
+[service]
+name = "bluez"
+exec = "/usr/lib/bluetooth/bluetoothd --nodetach"
+restart = "never"
+
+[deps]
+needs = ["dbus", "udev-trigger"]
+
+[ready]
+strategy = "socket"
+path = "/run/bluetooth/bluetooth.sock"

@@ -1,14 +1,11 @@
 [service]
 name = "networkmanager"
-exec = "/usr/bin/NetworkManager"
+exec = "/usr/bin/NetworkManager --no-daemon"
 restart = "on-failure"
 
 [deps]
 needs = ["dbus"]
-
-[ready]
-strategy = "pidfile"
-path = "/run/NetworkManager/NetworkManager.pid"
+after = ["nftables"]
 
 [resources]
 oom_score_adj = -100

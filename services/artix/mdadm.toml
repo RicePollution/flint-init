@@ -1,0 +1,8 @@
+# One-shot: assemble all software RAID arrays from /etc/mdadm.conf
+[service]
+name = "mdadm"
+exec = "/usr/bin/mdadm --assemble --scan"
+restart = "never"
+
+[deps]
+after = ["udev-trigger"]

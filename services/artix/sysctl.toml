@@ -1,0 +1,5 @@
+# One-shot: apply kernel parameters from /etc/sysctl.d/
+[service]
+name = "sysctl"
+exec = "/usr/bin/sysctl --system"
+restart = "never"

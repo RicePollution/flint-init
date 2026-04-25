@@ -1,0 +1,11 @@
+[service]
+name = "smartd"
+exec = "/usr/bin/smartd --no-fork --capabilities"
+restart = "never"
+
+[deps]
+after = ["udev-trigger", "syslog-ng"]
+
+[ready]
+strategy = "pidfile"
+path = "/run/smartd.pid"

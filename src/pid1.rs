@@ -5,6 +5,48 @@ use anyhow::{Context, Result};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
 
+/// Process tmpfiles.d(5) configuration: create directories declared with type
+/// `d` or `D`.  Called immediately after /run is mounted as tmpfs so services
+/// find their expected runtime directories already present.
+fn apply_tmpfiles() {
+    use std::os::unix::fs::DirBuilderExt;
+
+    for conf_dir in &["/usr/lib/tmpfiles.d", "/etc/tmpfiles.d"] {
+        let Ok(rd) = std::fs::read_dir(conf_dir) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("conf") {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for line in content.lines() {
+                let line = line.trim();
+                if line.starts_with('#') || line.is_empty() {
+                    continue;
+                }
+                let mut parts = line.split_whitespace();
+                let Some(kind) = parts.next() else { continue };
+                let Some(dir_path) = parts.next() else { continue };
+                if !matches!(kind, "d" | "D") {
+                    continue;
+                }
+                let mode = parts
+                    .next()
+                    .and_then(|m| u32::from_str_radix(m, 8).ok())
+                    .unwrap_or(0o755);
+                let _ = std::fs::DirBuilder::new()
+                    .mode(mode)
+                    .recursive(true)
+                    .create(dir_path);
+            }
+        }
+    }
+}
+
 /// Mount essential kernel filesystems. No-op when not running as PID 1.
 pub fn setup() -> Result<()> {
     if std::process::id() != 1 {
@@ -34,6 +76,27 @@ pub fn setup() -> Result<()> {
         None::<&str>,
     )
     .context("mount /sys")?;
+
+    // /run — tmpfs for runtime state (pidfiles, sockets).  Must come before
+    // services start so nothing writes to the stale on-disk /run from the
+    // previous boot.
+    std::fs::create_dir_all("/run").context("create /run")?;
+    match mount(
+        Some("tmpfs"),
+        "/run",
+        Some("tmpfs"),
+        MsFlags::empty(),
+        Some("mode=755,size=128m"),
+    ) {
+        Ok(()) => {}
+        Err(nix::Error::EBUSY) => {
+            eprintln!("[pid1] /run already mounted, skipping");
+        }
+        Err(e) => return Err(e).context("mount /run")?,
+    }
+
+    // Create runtime directories declared in tmpfiles.d(5).
+    apply_tmpfiles();
 
     // /dev — tmpfs (udev will populate it).
     // When CONFIG_DEVTMPFS_MOUNT=y the kernel mounts devtmpfs before exec'ing

@@ -1,0 +1,11 @@
+[service]
+name = "chronyd"
+exec = "/usr/bin/chronyd -n -d"
+restart = "never"
+
+[deps]
+after = ["hwclock"]
+
+[ready]
+strategy = "socket"
+path = "/run/chrony/chronyd.sock"

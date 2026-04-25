@@ -2,12 +2,8 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
-
 use inotify::{EventMask, Inotify, WatchMask};
 
-const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-const PROBE_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Spawn a thread that watches `path` for creation using inotify.
 /// When the file appears (or already exists), sends `service_name` on `tx`.
@@ -31,18 +27,11 @@ pub fn watch_socket(path: &Path, tx: Sender<String>, service_name: String) -> Jo
     })
 }
 
-/// Attempt to connect to a Unix domain socket until success or timeout.
-/// Returns true if connected, false on timeout. Fail-open: callers should
-/// log a warning and signal ready anyway when this returns false.
-fn probe_unix_socket(path: &Path, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if UnixStream::connect(path).is_ok() {
-            return true;
-        }
-        thread::sleep(PROBE_INTERVAL);
-    }
-    false
+/// Try once to connect to a Unix domain socket.
+/// Returns true if the socket is already accepting connections.
+/// Fail-open: callers signal ready regardless of the result.
+fn probe_unix_socket(path: &Path) -> bool {
+    UnixStream::connect(path).is_ok()
 }
 
 fn watch_once(
@@ -101,7 +90,7 @@ fn maybe_probe(path: &Path, service_name: &str, probe: bool) {
     if !probe {
         return;
     }
-    if probe_unix_socket(path, PROBE_TIMEOUT) {
+    if probe_unix_socket(path) {
         eprintln!("[ready] {} socket accepting connections: {:?}", service_name, path);
     } else {
         eprintln!(
@@ -160,7 +149,7 @@ mod tests {
         let sock_path = dir.path().join("test.sock");
 
         let _listener = UnixListener::bind(&sock_path).unwrap();
-        assert!(probe_unix_socket(&sock_path, Duration::from_secs(1)));
+        assert!(probe_unix_socket(&sock_path));
     }
 
     #[test]
@@ -171,8 +160,7 @@ mod tests {
         // Create the socket path entry but bind no listener.
         std::fs::write(&sock_path, "").unwrap();
 
-        // Short timeout so the test doesn't take 5s.
-        assert!(!probe_unix_socket(&sock_path, Duration::from_millis(150)));
+        assert!(!probe_unix_socket(&sock_path));
     }
 
     #[test]

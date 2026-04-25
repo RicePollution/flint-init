@@ -29,7 +29,7 @@ echo "---"
 qemu-system-x86_64 \
     -drive "file=$DISK_IMAGE,if=virtio,format=qcow2" \
     -kernel "$KERNEL" \
-    -append "root=/dev/vda1 rw init=/usr/sbin/flint-init console=ttyS0 loglevel=3" \
+    -append "root=/dev/vda1 rw init=/usr/bin/flint-init-new2 console=ttyS0 loglevel=3" \
     -display none \
     -chardev "file,id=char0,path=$SERIAL_LOG" \
     -serial chardev:char0 \

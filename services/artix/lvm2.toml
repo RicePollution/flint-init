@@ -1,0 +1,8 @@
+# One-shot: activate all LVM volume groups
+[service]
+name = "lvm2"
+exec = "/usr/bin/vgchange --activate y"
+restart = "never"
+
+[deps]
+after = ["udev-trigger"]

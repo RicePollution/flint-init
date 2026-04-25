@@ -1,0 +1,8 @@
+# One-shot: load nftables ruleset
+[service]
+name = "nftables"
+exec = "/usr/bin/nft --file /etc/nftables.conf"
+restart = "never"
+
+[deps]
+after = ["udev-trigger"]

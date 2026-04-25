@@ -1,0 +1,11 @@
+[service]
+name = "acpid"
+exec = "/usr/bin/acpid --foreground --netlink"
+restart = "never"
+
+[deps]
+needs = ["udev-trigger"]
+
+[ready]
+strategy = "socket"
+path = "/run/acpid.socket"

@@ -58,7 +58,8 @@ pub fn load_services_from_dir(dir: &std::path::Path) -> anyhow::Result<Vec<Servi
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("toml") {
             let content = std::fs::read_to_string(&path)?;
-            let def: ServiceDef = toml::from_str(&content)
+            let content = content.trim_end_matches('\0');
+            let def: ServiceDef = toml::from_str(content)
                 .map_err(|e| anyhow::anyhow!("Failed to parse {:?}: {}", path, e))?;
             services.push(def);
         }

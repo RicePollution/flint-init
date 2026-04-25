@@ -1,0 +1,8 @@
+# One-shot: loads modules listed in /etc/modules-load.d/
+[service]
+name = "kmod"
+exec = "/usr/lib/kmod/systemd-modules-load"
+restart = "never"
+
+[deps]
+after = ["udev"]

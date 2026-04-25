@@ -1,0 +1,7 @@
+[service]
+name = "irqbalance"
+exec = "/usr/bin/irqbalance --foreground"
+restart = "never"
+
+[deps]
+after = ["udev-trigger"]

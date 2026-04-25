@@ -1,0 +1,5 @@
+# One-shot: sync hardware RTC to system clock at boot
+[service]
+name = "hwclock"
+exec = "/usr/bin/hwclock --hctosys --utc"
+restart = "never"
