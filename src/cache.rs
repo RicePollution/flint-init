@@ -49,7 +49,11 @@ fn scan_toml_files(dir: &Path) -> Result<Vec<(String, SystemTime)>> {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("toml") {
             let mtime = entry.metadata()?.modified()?;
-            let filename = path.file_name().unwrap().to_string_lossy().into_owned();
+            let filename = path
+                .file_name()
+                .ok_or_else(|| anyhow::anyhow!("DirEntry has no filename: {:?}", path))?
+                .to_string_lossy()
+                .into_owned();
             files.push((filename, mtime));
         }
     }
