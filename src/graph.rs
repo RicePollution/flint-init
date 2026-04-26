@@ -155,7 +155,7 @@ impl ServiceGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::service::*;
+    use flint_init::service::*;
 
     fn make_service(name: &str, after: &[&str], needs: &[&str]) -> ServiceDef {
         ServiceDef {

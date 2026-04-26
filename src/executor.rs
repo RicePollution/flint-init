@@ -306,7 +306,7 @@ pub fn run(
 mod tests {
     use super::*;
     use crate::graph::ServiceGraph;
-    use crate::service::*;
+    use flint_init::service::*;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
 
