@@ -1,0 +1,4 @@
+[service]
+name = "flint-watch"
+exec = "/usr/bin/flint-watch /etc/flint/services"
+restart = "always"
