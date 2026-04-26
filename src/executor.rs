@@ -460,7 +460,7 @@ mod tests {
     fn service_with_oom_score_adj_runs() {
         // positive oom_score_adj (more killable) needs no special capability
         let mut svc = make_service_with_needs("oom_svc", &[], &[], "/usr/bin/true");
-        svc.resources = Some(crate::service::ResourcesSection { oom_score_adj: Some(100) });
+        svc.resources = Some(flint_init::service::ResourcesSection { oom_score_adj: Some(100) });
         let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
         assert!(run_no_ready(graph, vec![svc]).is_ok());
     }
