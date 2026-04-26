@@ -43,15 +43,17 @@ fn main() -> Result<()> {
     let dir = Path::new(services_dir);
 
     let manifest_path = dir.join(flint_init::cache::MANIFEST_FILENAME);
+    let t0 = std::time::Instant::now();
     let services = cache::load_services_cached(dir, &manifest_path)
         .with_context(|| format!("loading services from {:?}", dir))?;
+    let load_us = t0.elapsed().as_micros();
 
     if services.is_empty() {
         eprintln!("[flint] no services found in {:?}", dir);
         return Ok(());
     }
 
-    eprintln!("[flint] loaded {} service(s)", services.len());
+    eprintln!("[flint] loaded {} service(s) in {}µs", services.len(), load_us);
 
     let graph =
         graph::ServiceGraph::build(services.clone()).context("building dependency graph")?;
