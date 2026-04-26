@@ -13,7 +13,7 @@ use std::sync::mpsc;
 use anyhow::{Context, Result};
 use nix::sys::signal::{signal, SigHandler, Signal};
 
-use flint_init::service::load_services_from_dir;
+use flint_init::cache;
 use flint_init::service::ReadyStrategy;
 
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
@@ -42,7 +42,8 @@ fn main() -> Result<()> {
     let services_dir = args.get(1).map(String::as_str).unwrap_or(default_dir);
     let dir = Path::new(services_dir);
 
-    let services = load_services_from_dir(dir)
+    let manifest_path = dir.join("services.bin");
+    let services = cache::load_services_cached(dir, &manifest_path)
         .with_context(|| format!("loading services from {:?}", dir))?;
 
     if services.is_empty() {
