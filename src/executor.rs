@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use crate::ctl_proto::{self, SharedState};
 use crate::graph::ServiceGraph;
-use crate::service::{RestartPolicy, ServiceDef};
+use flint_init::service::{RestartPolicy, ServiceDef};
 
 const MAX_RESTARTS: u32 = 5;
 

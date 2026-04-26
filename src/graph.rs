@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use thiserror::Error;
 
-use crate::service::ServiceDef;
+use flint_init::service::ServiceDef;
 
 #[derive(Debug, Error)]
 pub enum GraphError {

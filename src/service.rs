@@ -1,7 +1,7 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Top-level service file — maps directly to a `.toml` file.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceDef {
     pub service: ServiceSection,
     pub deps: Option<DepsSection>,
@@ -9,14 +9,14 @@ pub struct ServiceDef {
     pub resources: Option<ResourcesSection>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceSection {
     pub name: String,
     pub exec: String,
     pub restart: Option<RestartPolicy>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum RestartPolicy {
     Always,
@@ -24,7 +24,7 @@ pub enum RestartPolicy {
     Never,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DepsSection {
     #[serde(default)]
     pub after: Vec<String>,
@@ -32,20 +32,20 @@ pub struct DepsSection {
     pub needs: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadySection {
     pub strategy: ReadyStrategy,
     pub path: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum ReadyStrategy {
     Pidfile,
     Socket,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ResourcesSection {
     pub oom_score_adj: Option<i32>,
 }
@@ -126,6 +126,20 @@ exec = "/bin/foo"
         let services = load_services_from_dir(dir.path()).unwrap();
         assert_eq!(services.len(), 1);
         assert_eq!(services[0].service.name, "foo");
+    }
+
+    #[test]
+    fn service_def_bincode_round_trips() {
+        let original: ServiceDef = toml::from_str(FULL_TOML).unwrap();
+        let bytes = bincode::serialize(&original).expect("serialize failed");
+        let restored: ServiceDef = bincode::deserialize(&bytes).expect("deserialize failed");
+        assert_eq!(restored.service.name, original.service.name);
+        assert_eq!(restored.service.exec, original.service.exec);
+        assert_eq!(restored.service.restart, original.service.restart);
+        assert_eq!(
+            restored.deps.as_ref().unwrap().needs,
+            original.deps.as_ref().unwrap().needs
+        );
     }
 
     #[test]

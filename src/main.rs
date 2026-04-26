@@ -5,7 +5,6 @@ mod fstab;
 mod graph;
 mod pid1;
 mod ready;
-mod service;
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,7 +13,8 @@ use std::sync::mpsc;
 use anyhow::{Context, Result};
 use nix::sys::signal::{signal, SigHandler, Signal};
 
-use service::{load_services_from_dir, ReadyStrategy};
+use flint_init::service::load_services_from_dir;
+use flint_init::service::ReadyStrategy;
 
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
