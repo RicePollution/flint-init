@@ -1,5 +1,6 @@
 # Rust build artifacts
 /target/
+services.bin
 
 # Claude Code internal files — not for public consumption
 CLAUDE.md
