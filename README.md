@@ -164,16 +164,18 @@ prompt appears on the serial console.
 |--------|--------|-------------|---------------------------|-------|
 | OpenRC 0.63 (Alpine 3.23 live ISO) | 6.18 virt | 10,955 ms | **18,072 ms** | 29,027 ms |
 | systemd 260 (Arch 2026.04 live ISO) | 6.19.10 arch | 43,857 ms | **77,913 ms** | 121,771 ms |
-| flint-init (Artix, 31 services, disk) | 6.19 full | 7,419 ms | **637 ms** | 8,056 ms |
+| flint-init (Artix, 32 services, disk, warm cache) | 6.19 full | 7,419 ms | **760 ms** | 8,179 ms |
 
-**flint-init reaches a login prompt 28× faster than OpenRC and 122× faster than systemd
+**flint-init reaches a login prompt 24× faster than OpenRC and 103× faster than systemd
 from PID 1 exec.** Both ISO baselines carry live-medium overhead not present on installed
 systems: Alpine squashfs verification adds ~3–5 s to OpenRC userspace; systemd's 43 s
 "kernel boot" is almost entirely the 226 MB Arch initramfs decompressing before PID 1
 is even exec'd, and the 78 s userspace includes one-time live-ISO tasks (rebuild linker
 cache, generate SSH host keys) that don't repeat on real hardware. On an installed desktop
-OpenRC typically reaches login in 12–15 s and systemd in 2–5 s; flint-init's 637 ms
-includes all 31 services beginning to start.
+OpenRC typically reaches login in 12–15 s and systemd in 2–5 s; flint-init's 760 ms
+includes all 32 services beginning to start. The warm binary cache (see § Binary Config
+Cache below) loads service definitions in 17–28 ms instead of 114 ms cold, saving ~90 ms
+off the userspace total; the remainder is dominated by agetty startup and automatic login.
 
 ### What OpenRC is doing for those 18 seconds
 
@@ -232,16 +234,18 @@ where it can, but a chain of mandatory targets still sequences startup:
 > **Note:** "Rebuild dynamic linker cache" and "Generate SSH host keys" are live-ISO
 > one-time tasks; they do not run on every boot of an installed system.
 
-### What flint-init is doing for those 637 ms
+### What flint-init is doing for those 760 ms
 
 ```
 [PID 1 exec — t=0]
+  ├─ config load  ━ 17–28 ms (warm binary cache)  ← replaces 114 ms cold TOML parse
   ├─ udev         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ (socket ready at ~1500ms)
   ├─ dbus         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ (socket ready at ~1800ms)
   ├─ syslog-ng    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ├─ flint-watch  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ (watches /etc/flint/services)
   ├─ sysctl       ━━ done                        ← no deps, runs in parallel
   ├─ hwclock      ━ done                         ← no deps, runs in parallel
-  ├─ agetty       ━ LOGIN ◄── t=637ms            ← no deps, shows prompt immediately
+  ├─ agetty       ━ LOGIN ◄── t=760ms            ← no deps, shows prompt immediately
   └─ agetty×6     ━ (tty1–tty6, also at t=0)
 
 [udev ready → udev-trigger starts]
@@ -250,7 +254,8 @@ where it can, but a chain of mandatory targets still sequences startup:
 
 The login prompt is not held hostage by modules, clocks, or filesystems. agetty has no
 dependencies in the service graph, so it starts at t=0 and the user sees a prompt in
-under a second while everything else initialises in the background.
+under a second while everything else initialises in the background. The binary cache
+(services.bin) eliminates TOML parsing at boot entirely on warm starts.
 
 > **Measurement method:** all VMs started with `date +%s%N`, serial output captured
 > to a file, `grep` polled until target strings appeared (`scripts/measure-systemd-boot.sh`
@@ -261,20 +266,20 @@ under a second while everything else initialises in the background.
 
 ---
 
-## Real Boot — v0.4.4
+## Real Boot — v0.4.17
 
 flint-init booted a real Artix Linux QEMU disk image as PID 1, replacing OpenRC,
-managing 31 services from `/etc/flint/services/`:
+managing 32 services from `/etc/flint/services/` (warm binary cache):
 
 ```
 [pid1] mounted /proc, /sys, /dev
-[flint] loaded 31 service(s)
+[flint] loaded 32 service(s) in 16766µs
 [ctl] listening on /run/flint/ctl.sock
 [flint] starting: udev
 [flint] starting: syslog-ng
 [flint] starting: sysctl
 [flint] starting: hwclock
-[flint] starting: kmod
+[flint] starting: flint-watch
 [flint] starting: dbus
 [flint] starting: agetty-tty1
 [flint] starting: agetty-tty2
@@ -285,12 +290,12 @@ managing 31 services from `/etc/flint/services/`:
 [flint] starting: agetty         (ttyS0)
 [flint] exited: sysctl (code=0)
 [flint] exited: hwclock (code=0)
-[flint] exited: kmod (code=0)
 
 Artix Linux 6.19.11-artix1-1 (ttyS0)
 
 artixlinux login: root (automatic login)
 
+[flint-watch] manifest ready (32 entries), watching "/etc/flint/services"
 [ready] udev ready (socket): "/run/udev/control"
 [flint] starting: udev-trigger
 [ready] dbus socket accepting connections: "/run/dbus/system_bus_socket"
@@ -305,10 +310,10 @@ Server listening on :: port 22.
 Server listening on 0.0.0.0 port 22.
 ```
 
-The login prompt appears before udev has even finished initialising. 13 services start
-at t=0 (no unsatisfied dependencies): udev, syslog-ng, sysctl, hwclock, kmod, dbus,
-and all seven agetty instances. sshd, NetworkManager, polkit, and others unblock the
-instant dbus signals ready — they don't wait for each other or for udev.
+The login prompt appears before udev has even finished initialising. 14 services start
+at t=0 (no unsatisfied dependencies): udev, syslog-ng, sysctl, hwclock, flint-watch,
+dbus, and all seven agetty instances. sshd, NetworkManager, polkit, and others unblock
+the instant dbus signals ready — they don't wait for each other or for udev.
 
 Optional services (pipewire, bluez, cups, avahi, chronyd, smartd, wpa_supplicant,
 wireplumber) are configured `restart = "never"` so a missing binary on a minimal VM
