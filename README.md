@@ -142,12 +142,17 @@ prompt appears on the serial console.
 | System | Kernel | Kernel boot | Userspace (PID 1 → login) | Total |
 |--------|--------|-------------|---------------------------|-------|
 | OpenRC 0.63 (Alpine 3.23 live ISO) | 6.18 virt | 10,955 ms | **18,072 ms** | 29,027 ms |
+| systemd 260 (Arch 2026.04 live ISO) | 6.19.10 arch | 43,857 ms | **77,913 ms** | 121,771 ms |
 | flint-init (Artix, 31 services, disk) | 6.19 full | 7,419 ms | **637 ms** | 8,056 ms |
 
-**flint-init reaches a login prompt 28× faster from PID 1 exec.** The Alpine ISO adds
-overhead from squashfs verification that a real installed system avoids; without it
-OpenRC userspace is roughly 12–15 s on a typical desktop, which matches user-reported
-figures. flint-init's 637 ms includes all 31 services beginning to start.
+**flint-init reaches a login prompt 28× faster than OpenRC and 122× faster than systemd
+from PID 1 exec.** Both ISO baselines carry live-medium overhead not present on installed
+systems: Alpine squashfs verification adds ~3–5 s to OpenRC userspace; systemd's 43 s
+"kernel boot" is almost entirely the 226 MB Arch initramfs decompressing before PID 1
+is even exec'd, and the 78 s userspace includes one-time live-ISO tasks (rebuild linker
+cache, generate SSH host keys) that don't repeat on real hardware. On an installed desktop
+OpenRC typically reaches login in 12–15 s and systemd in 2–5 s; flint-init's 637 ms
+includes all 31 services beginning to start.
 
 ### What OpenRC is doing for those 18 seconds
 
@@ -180,6 +185,32 @@ begins — even though most are completely independent of each other:
 [login prompt — t=18,072 ms]
 ```
 
+### What systemd is doing for those 77,913 ms
+
+The 43 s kernel boot is the archiso initramfs (226 MB) being decompressed and the
+squashfs live root being mounted before PID 1 is exec'd. Systemd then runs in parallel
+where it can, but a chain of mandatory targets still sequences startup:
+
+```
+[systemd[1] exec — t=0 relative]
+  Remount root and kernel filesystems ...     [ ok ]   │
+  Coldplug all udev devices ...               [ ok ]   │
+  Load kernel modules ...                     [ ok ]   │  each target must be
+  Rebuild dynamic linker cache ...            [ ok ]   │  reached before the
+  System Initialization ...                   [ ok ]   │  next begins
+  D-Bus System Message Bus ...                [ ok ]   │
+  Basic System ...                            [ ok ]   │
+  Generate SSH host keys ...                  [ ok ]   │
+  Network ...                                 [ ok ]   │
+  Permit User Sessions ...                    [ ok ]   │
+  Serial Getty on ttyS0 ...                   [ ok ]   │
+                                                       ▼
+[archiso login: — t=77,913 ms]
+```
+
+> **Note:** "Rebuild dynamic linker cache" and "Generate SSH host keys" are live-ISO
+> one-time tasks; they do not run on every boot of an installed system.
+
 ### What flint-init is doing for those 637 ms
 
 ```
@@ -200,12 +231,12 @@ The login prompt is not held hostage by modules, clocks, or filesystems. agetty 
 dependencies in the service graph, so it starts at t=0 and the user sees a prompt in
 under a second while everything else initialises in the background.
 
-> **Measurement method:** both VMs started with `date +%s%N`, serial output captured
-> to a file, `grep` polled until target strings appeared. Kernel boot times differ
-> because Alpine uses a stripped virt kernel while Artix uses a full desktop kernel.
-> Alpine figures include live-ISO squashfs overhead (~3–5 s) not present on installed
-> systems; real-hardware OpenRC typically runs 12–15 s to login on a desktop with
-> NetworkManager and dbus.
+> **Measurement method:** all VMs started with `date +%s%N`, serial output captured
+> to a file, `grep` polled until target strings appeared (`scripts/measure-systemd-boot.sh`
+> for the Arch/systemd run). Kernel boot times differ because Alpine uses a stripped
+> virt kernel, Arch uses a full desktop kernel with a 226 MB live initramfs, and Artix
+> boots directly from a disk image with no initramfs at all. Both live-ISO baselines
+> include overhead not present on installed systems.
 
 ---
 

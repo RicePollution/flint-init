@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # scripts/qemu-test.sh — build flint-init, package an initramfs, boot in QEMU.
+# Uses services/initramfs/ (minimal 4-service set: udev, dbus, nm-priv-helper, NM).
 #
 # Usage: bash scripts/qemu-test.sh
 #
@@ -34,7 +35,7 @@ mkdir -p "$INITRAMFS_DIR"/{bin,sbin,usr/bin,usr/sbin,usr/lib}
 ln -sf usr/lib "$INITRAMFS_DIR/lib"
 ln -sf usr/lib "$INITRAMFS_DIR/lib64"
 ln -sf lib     "$INITRAMFS_DIR/usr/lib64"
-mkdir -p "$INITRAMFS_DIR"/services/real
+mkdir -p "$INITRAMFS_DIR"/services/initramfs
 mkdir -p "$INITRAMFS_DIR/run/NetworkManager"
 
 # flint-init binary as /init
@@ -52,7 +53,7 @@ ldd "$BINARY" 2>/dev/null | awk '{
 done
 
 # Service definitions
-cp "$REPO_ROOT"/services/real/*.toml "$INITRAMFS_DIR/services/real/"
+cp "$REPO_ROOT"/services/initramfs/*.toml "$INITRAMFS_DIR/services/initramfs/"
 
 # --- copy a binary and all its ldd-reported shared libs ---
 copy_binary() {
@@ -178,7 +179,7 @@ echo "---"
 exec qemu-system-x86_64 \
     -kernel "$KERNEL" \
     -initrd "$OUTPUT_CPIO" \
-    -append "init=/init FLINT_ON_EXIT=halt GIO_MODULE_DIR=/dev/null console=ttyS0 -- /services/real" \
+    -append "init=/init FLINT_ON_EXIT=halt GIO_MODULE_DIR=/dev/null console=ttyS0 -- /services/initramfs" \
     -nographic \
     -m 256M \
     -no-reboot \
