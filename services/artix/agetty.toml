@@ -1,4 +1,4 @@
 [service]
 name = "agetty"
-exec = "/sbin/agetty --autologin root --noclear ttyS0 115200 linux"
+exec = "/sbin/agetty --noclear ttyS0 115200 linux"
 restart = "always"
