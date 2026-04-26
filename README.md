@@ -76,8 +76,9 @@ instant the file appears. Zero polling. Zero sleep loops.
 
 Two readiness strategies:
 - `pidfile`: ready when the pidfile is created
-- `socket`: ready when the socket file appears **and** a connection probe succeeds
-  (loops `UnixStream::connect` for up to 5 seconds to confirm the daemon is accepting)
+- `socket`: ready when the socket file appears **and** a single `UnixStream::connect`
+  probe succeeds. Fail-open: if the probe fails, flint-init logs a warning and signals
+  ready anyway so dependents are not blocked indefinitely.
 
 When a service signals ready, its dependents' in-degree counters are decremented. Any
 that reach zero join the run queue immediately.
@@ -208,7 +209,7 @@ under a second while everything else initialises in the background.
 
 ---
 
-## Real Boot — v0.4.1
+## Real Boot — v0.4.4
 
 flint-init booted a real Artix Linux QEMU disk image as PID 1, replacing OpenRC,
 managing 31 services from `/etc/flint/services/`:
@@ -221,11 +222,18 @@ managing 31 services from `/etc/flint/services/`:
 [flint] starting: syslog-ng
 [flint] starting: sysctl
 [flint] starting: hwclock
+[flint] starting: kmod
 [flint] starting: dbus
-[flint] starting: agetty-tty1  (+ tty2 through tty6)
-[flint] starting: agetty        (ttyS0)
+[flint] starting: agetty-tty1
+[flint] starting: agetty-tty2
+[flint] starting: agetty-tty3
+[flint] starting: agetty-tty4
+[flint] starting: agetty-tty5
+[flint] starting: agetty-tty6
+[flint] starting: agetty         (ttyS0)
 [flint] exited: sysctl (code=0)
 [flint] exited: hwclock (code=0)
+[flint] exited: kmod (code=0)
 
 Artix Linux 6.19.11-artix1-1 (ttyS0)
 
@@ -238,14 +246,21 @@ artixlinux login: root (automatic login)
 [flint] starting: networkmanager
 [flint] starting: sshd
 [flint] starting: polkit
+[flint] starting: cronie
+[flint] starting: acpid
+[flint] starting: irqbalance
 Server listening on :: port 22.
 Server listening on 0.0.0.0 port 22.
 ```
 
-The login prompt appears before udev has even finished initialising. agetty, sysctl,
-hwclock, dbus, and syslog-ng all start at t=0 because they have no unsatisfied
-dependencies. sshd and NetworkManager unblock the instant dbus signals ready — they
-don't wait for each other or for udev.
+The login prompt appears before udev has even finished initialising. 13 services start
+at t=0 (no unsatisfied dependencies): udev, syslog-ng, sysctl, hwclock, kmod, dbus,
+and all seven agetty instances. sshd, NetworkManager, polkit, and others unblock the
+instant dbus signals ready — they don't wait for each other or for udev.
+
+Optional services (pipewire, bluez, cups, avahi, chronyd, smartd, wpa_supplicant,
+wireplumber) are configured `restart = "never"` so a missing binary on a minimal VM
+fails quietly without respawn attempts.
 
 ---
 
@@ -278,15 +293,15 @@ cargo test   # 41 unit + integration tests, no root required
 ## QEMU Tests
 
 ```bash
-# Initramfs boot — udev, dbus, nm-priv-helper, NetworkManager:
+# Full Artix disk image — 31 services, flint-init as PID 1 (primary test):
+sudo bash scripts/create-artix-vm.sh     # one-time setup, ~5 min
+bash scripts/boot-artix-vm.sh            # boots and tails serial log
+
+# Initramfs boot — udev, dbus, NetworkManager (lighter, no disk image):
 bash scripts/qemu-test.sh
 
 # Stage 3 integration — restart logic + flint-ctl:
 bash scripts/qemu-stage3-test.sh
-
-# Stage 4 — full Artix disk image (requires creating the image first):
-sudo bash scripts/create-artix-vm.sh     # one-time, ~5 min
-bash scripts/boot-artix-vm.sh            # boots and tails serial log
 ```
 
 ## Service Definition Reference
