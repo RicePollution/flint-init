@@ -7,7 +7,7 @@ use inotify::{EventMask, Inotify, WatchMask};
 
 use flint_init::cache::{
     load_services_cached, read_manifest, write_manifest, Manifest, ManifestEntry,
-    MANIFEST_VERSION,
+    MANIFEST_FILENAME, MANIFEST_VERSION,
 };
 use flint_init::service::ServiceDef;
 
@@ -16,7 +16,7 @@ const DEFAULT_SERVICES_DIR: &str = "/etc/flint/services";
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let dir = PathBuf::from(args.get(1).map(String::as_str).unwrap_or(DEFAULT_SERVICES_DIR));
-    let manifest_path = dir.join("services.bin");
+    let manifest_path = dir.join(MANIFEST_FILENAME);
 
     // Ensure manifest is up to date at startup (handles gap while watcher was not running).
     let services = load_services_cached(&dir, &manifest_path)?;
@@ -25,13 +25,17 @@ fn main() -> Result<()> {
     let mut inotify = Inotify::init()?;
     inotify.watches().add(
         &dir,
-        WatchMask::CLOSE_WRITE | WatchMask::MOVED_TO | WatchMask::DELETE,
+        WatchMask::CLOSE_WRITE | WatchMask::MOVED_TO | WatchMask::DELETE | WatchMask::DELETE_SELF,
     )?;
 
     let mut buffer = [0u8; 4096];
     loop {
         let events = inotify.read_events_blocking(&mut buffer)?;
         for event in events {
+            if event.mask.contains(EventMask::DELETE_SELF) || event.mask.contains(EventMask::IGNORED) {
+                eprintln!("[flint-watch] fatal: watched directory was deleted or unmounted");
+                std::process::exit(1);
+            }
             let name = match event.name {
                 Some(n) => n.to_string_lossy().into_owned(),
                 None => continue,

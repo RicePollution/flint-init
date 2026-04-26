@@ -42,7 +42,7 @@ fn main() -> Result<()> {
     let services_dir = args.get(1).map(String::as_str).unwrap_or(default_dir);
     let dir = Path::new(services_dir);
 
-    let manifest_path = dir.join("services.bin");
+    let manifest_path = dir.join(flint_init::cache::MANIFEST_FILENAME);
     let services = cache::load_services_cached(dir, &manifest_path)
         .with_context(|| format!("loading services from {:?}", dir))?;
 

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::service::ServiceDef;
 
 pub const MANIFEST_VERSION: u8 = 1;
+pub const MANIFEST_FILENAME: &str = "services.bin";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ManifestEntry {
