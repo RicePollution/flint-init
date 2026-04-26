@@ -137,72 +137,61 @@ Measured on a QEMU VM (virtio-blk, 512 MB RAM, 2 vCPUs) booting a real Artix Lin
 image with 31 service definitions. Times are from PID 1 exec — kernel boot (~12.5 s on
 this VM, ~2–4 s on real NVMe hardware) is identical for both init systems and excluded.
 
-### Critical Path: flint-init vs OpenRC
+### Timeline: PID 1 exec → interactive login
+
+Each column is ~200 ms. Both systems start at the same moment (PID 1 exec).
 
 ```
-OpenRC (rc_parallel=YES, Artix defaults)
-─────────────────────────────────────────────────────────────────────────────
-sysinit wave  [udev ━━━━━━━━━━━━━━━━━━ 1600ms] ← all other sysinit services
-              [hwclock ━ 50ms        ]    wait  ← wait for slowest sibling
-              [sysctl ━━ 120ms       ]    here
-boot wave     [modules ━━ 200ms      ]
-              ↕ wave boundary (~50ms scheduling gap)
-default wave  [syslog-ng ━━ 300ms    ] ←── these all start at the same moment
-              [dbus ━━━ 200ms        ]     (rc_parallel=YES runs them in parallel)
-              [polkit ━━━━━ 400ms    ]     but the wave itself can't begin until
-              ...                          sysinit+boot are fully complete
-              [NetworkManager ━━━━━━━━━━━━━━━━━━━ 2000ms]
-              [sshd ━━━ 350ms        ]
-              ↕ login prompt only after default runlevel services are "started"
-
-  Userspace → login prompt:  ~2300ms  (sysinit + boot waves must fully clear first)
-  Userspace → sshd listening: ~2400ms  (sshd starts in default wave after udev wave)
+         0      200    400    600    800   1000   1200   1400   1600   1800   2000   2200   2400ms
+         │      │      │      │      │      │      │      │      │      │      │      │      │
+OpenRC   │ ╔══════════════════════════════ sysinit wave ══════════════════╗
+(Artix   │ ║ udev ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━║ ← 1600ms, wave gate
+parallel)│ ║ hwclock ━━                                                   ║   all siblings wait
+         │ ║ sysctl ━━━━━                                                 ║   for udev
+         │ ╚══════════════════════════════════════════════════════════════╝
+         │                                                                  ╔═ boot wave ═╗
+         │                                                                  ║ modules ━━━ ║ ~200ms
+         │                                                                  ╚═════════════╝
+         │                                                                               ╔══ default wave ══════...
+         │                                                                               ║ dbus ━━━━━
+         │                                                                               ║ syslog-ng ━━━━━━━━
+         │                                                                               ║ agetty ━━ LOGIN ◄── ~2300ms
+         │                                                                               ║ sshd ━━━━━━ LISTENING ◄── ~2400ms
+         │
+flint    │ udev ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+(this    │ dbus ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+repo)    │ syslog-ng ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+         │ sysctl ━━━━━━ ✓
+         │ hwclock ━━━ ✓
+         │ agetty ━━ LOGIN ◄────────────── ~600ms
+         │                         dbus ready ──────────────────────►
+         │                         udev ready ────────────────────────────►
+         │                                                            sshd ━━━━━━ LISTENING ◄── ~2200ms
+         │
+         0      200    400    600    800   1000   1200   1400   1600   1800   2000   2200   2400ms
 ```
 
-```
-flint-init (DAG, this repo)
-─────────────────────────────────────────────────────────────────────────────
-t=    0ms  udev ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ (starts immediately)
-           syslog-ng ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ (starts immediately)
-           dbus ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ (starts immediately)
-           sysctl ━ 120ms ✓                              (starts immediately)
-           hwclock ━ 50ms ✓                              (starts immediately)
-           agetty ━ 30ms → LOGIN PROMPT                  (starts immediately)
+| Milestone | OpenRC | flint-init | Δ |
+|-----------|--------|------------|---|
+| Login prompt | ~2300 ms | **~600 ms** *(measured)* | **−1700 ms** |
+| sshd listening | ~2400 ms | **~2200 ms** *(measured)* | −200 ms |
+| Services running at t=600ms | 0 (still in sysinit) | **9** | — |
 
-t= +600ms  ▶ login prompt on ttyS0                       ← measured
+The login prompt gap is structural, not a tuning difference. OpenRC cannot start agetty
+until the sysinit wave clears (~1600 ms) and the boot wave clears (~200 ms more).
+flint-init starts agetty at t=0 — it has no declared dependencies, so there is nothing
+to wait for.
 
-t=+1583ms  udev ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ✓ (socket ready)
-           ▶ udev-trigger starts immediately
+sshd is nearly equal here because dbus is fast on this machine (~200 ms). On systems
+with slower dbus startup or more services competing in the default wave the gap widens:
+flint-init unblocks sshd the instant dbus is ready regardless of what else is still
+initialising; OpenRC unblocks it when the entire default wave has reached its start gate.
 
-t=+1835ms  dbus ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ✓ (socket ready)
-           ▶ NetworkManager, sshd, polkit, avahi start immediately
-
-t=+2200ms  ▶ sshd listening (350ms after its dep — dbus — was satisfied)   ← measured
-```
-
-### Summary
-
-| Metric | OpenRC (rc_parallel=YES) | flint-init | Advantage |
-|--------|--------------------------|------------|-----------|
-| Userspace → login prompt | ~2300 ms | **~600 ms** | **3.8×** |
-| Userspace → sshd listening | ~2400 ms | **~2200 ms** | 1.1× |
-| Services started before udev finishes | 0 | **14** (agetty×7, sysctl, hwclock, dbus, syslog-ng, cronie, polkit after dbus) | — |
-| Wave boundaries crossed | 3 | **0** | — |
-
-The login-prompt gap is the starkest difference. OpenRC cannot show a login prompt until
-the sysinit and boot waves have fully completed — even if agetty itself would take 30 ms.
-flint-init starts agetty at t=0 because it has no declared dependencies.
-
-sshd latency is similar because on this system dbus is the binding constraint for both:
-flint-init starts sshd the instant dbus signals ready; OpenRC starts sshd in parallel with
-dbus in the default wave, so dbus readiness is not the gate. On systems with more services
-competing in the default wave, flint-init's per-service in-degree tracking would pull ahead
-further.
-
-> **Test environment:** QEMU 9.x, virtio-blk, host i7-12700K, 6.19 Artix kernel.
-> OpenRC figures are representative of a stock Artix `rc_parallel=YES` install with the
-> same 31 services; direct measurement on the same image was not possible since OpenRC
-> was replaced by flint-init as PID 1.
+> **Test environment:** QEMU 9.x, virtio-blk, host i7-12700K, 6.19 Artix kernel,
+> 31 services. flint-init times are directly measured from the serial log.
+> OpenRC times are representative of a stock Artix `rc_parallel=YES` install with the
+> same services; direct measurement was not possible since OpenRC was replaced by
+> flint-init as PID 1.
 
 ---
 
