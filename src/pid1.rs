@@ -124,6 +124,20 @@ pub fn setup() -> Result<()> {
     let _ = std::os::unix::fs::symlink("/proc/self/fd/1", "/dev/stdout");
     let _ = std::os::unix::fs::symlink("/proc/self/fd/2", "/dev/stderr");
 
+    // Redirect our own logging to the kernel ring buffer so [flint] messages
+    // don't queue up in the serial console output buffer.  agetty calls
+    // tcsetattr(TCSAFLUSH) which blocks until the ttyS0 buffer drains; every
+    // byte we write there adds latency before the login prompt appears.
+    // Messages are still visible via dmesg / journalctl -k.
+    if let Ok(kmsg) = std::fs::OpenOptions::new().write(true).open("/dev/kmsg") {
+        use std::os::unix::io::IntoRawFd;
+        let fd = kmsg.into_raw_fd();
+        unsafe {
+            libc::dup2(fd, 2); // stderr → /dev/kmsg
+            libc::close(fd);
+        }
+    }
+
     // Mount remaining filesystems from /etc/fstab (skip root and virtual fs).
     if let Err(e) = crate::fstab::mount_all() {
         eprintln!("[pid1] fstab mount warning: {}", e);

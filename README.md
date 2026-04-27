@@ -155,84 +155,78 @@ $ flint-ctl stop networkmanager
 
 ## Boot Time Comparison
 
-Both systems measured on the same host (i7-12700K) in QEMU with virtio networking,
-512 MB RAM, 2 vCPUs. Times are from QEMU launch. The **userspace time** column isolates
-the init system — it is measured from the moment PID 1 is exec'd to the moment a login
-prompt appears on the serial console.
+All three systems measured on the same host (i7-12700K) in QEMU with the **same
+configuration**: host kernel (`/boot/vmlinuz-linux`, 6.19.11-artix1-1), no initramfs,
+virtio disk, 512 MB RAM, 2 vCPUs, serial console. Each is an **installed disk image**
+(not a live ISO), created fresh for this test. Times are from QEMU launch.
+
+The **userspace time** column isolates the init system — it is measured from the moment
+PID 1 is exec'd to the moment a login prompt appears on the serial console.
 
 | System | Kernel | Kernel boot | Userspace (PID 1 → login) | Total |
 |--------|--------|-------------|---------------------------|-------|
-| OpenRC 0.63 (Alpine 3.23 live ISO) | 6.18 virt | 10,955 ms | **18,072 ms** | 29,027 ms |
-| systemd 260 (Arch 2026.04 live ISO) | 6.19.10 arch | 43,857 ms | **77,913 ms** | 121,771 ms |
-| flint-init (Artix, 32 services, disk, warm cache) | 6.19 full | 7,419 ms | **760 ms** | 8,179 ms |
+| OpenRC 0.63.1 (Artix, installed) | 6.19.11 artix | 14,919 ms | **82,892 ms** | 97,811 ms |
+| systemd 260 (Arch, installed) | 6.19.11 artix | 11,075 ms | **34,362 ms** | 45,437 ms |
+| flint-init (Artix, 32 services, warm cache) | 6.19.11 artix | 7,419 ms | **760 ms** | 8,179 ms |
 
-**flint-init reaches a login prompt 24× faster than OpenRC and 103× faster than systemd
-from PID 1 exec.** Both ISO baselines carry live-medium overhead not present on installed
-systems: Alpine squashfs verification adds ~3–5 s to OpenRC userspace; systemd's 43 s
-"kernel boot" is almost entirely the 226 MB Arch initramfs decompressing before PID 1
-is even exec'd, and the 78 s userspace includes one-time live-ISO tasks (rebuild linker
-cache, generate SSH host keys) that don't repeat on real hardware. On an installed desktop
-OpenRC typically reaches login in 12–15 s and systemd in 2–5 s; flint-init's 760 ms
-includes all 32 services beginning to start. The warm binary cache (see § Binary Config
-Cache below) loads service definitions in 17–28 ms instead of 114 ms cold, saving ~90 ms
-off the userspace total; the remainder is dominated by agetty startup and automatic login.
+**flint-init reaches a login prompt 45× faster than systemd and 109× faster than OpenRC
+from PID 1 exec.** All three run the same kernel on equivalent installed systems, so the
+userspace column is a direct measure of each init system's overhead with no live-ISO
+noise. flint-init's 760 ms includes all 32 services beginning to start; agetty has no
+dependencies in the service graph so the login prompt appears at t=0 while the rest
+initialise in the background.
 
-### What OpenRC is doing for those 18 seconds
+The warm binary cache (see § Binary Config Cache) loads service definitions in 17–28 ms
+instead of 114 ms cold, saving ~90 ms off the userspace total.
 
-The entire init sequence runs serially. Each line below must finish before the next
-begins — even though most are completely independent of each other:
+### What OpenRC is doing for those 82 seconds
+
+The entire init sequence runs serially — each step must finish before the next begins,
+even when they are completely independent of each other:
 
 ```
-[OpenRC 0.63 starts — t=0 relative]
- * Caching service dependencies ...         [ ok ]   │
- * Remounting devtmpfs on /dev ...          [ ok ]   │
- * Mounting /dev/mqueue ...                 [ ok ]   │
- * Mounting modloop (squashfs verify) ...   [ ok ]   │  one at a time,
- * Mounting security filesystem ...         [ ok ]   │  every step blocks
- * Mounting debug filesystem ...            [ ok ]   │  the next
- * Starting busybox mdev ...                [ ok ]   │
- * Scanning hardware for mdev ...           [ ok ]   │
- * Loading hardware drivers ...             [ ok ]   │
- * Loading modules ...                      [ ok ]   │
- * Setting system clock ...                 [ ok ]   │
- * Checking local filesystems ...           [ ok ]   │
- * Remounting filesystems ...               [ ok ]   │
- * Mounting local filesystems ...           [ ok ]   │
- * Configuring kernel parameters ...        [ ok ]   │
- * Creating user login records ...          [ ok ]   │
- * Cleaning /tmp directory ...              [ ok ]   │
- * Setting hostname ...                     [ ok ]   │
- * Starting busybox syslog ...              [ ok ]   │
- * Starting firstboot ...                   [ ok ]   │
-                                                     ▼
-[login prompt — t=18,072 ms]
+[openrc-init exec — t=0 relative]
+ * Mounting /proc, /sys, /run ...          [ ok ]   │
+ * Caching service dependencies ...        [ ok ]   │
+ * Mounting security/debug/bpf fs ...      [ ok ]   │  one at a time,
+ * Checking local filesystems ...          [ ok ]   │  every step blocks
+ * Remounting filesystems ...              [ ok ]   │  the next
+ * Mounting local filesystems ...          [ ok ]   │
+ * Configuring kernel parameters ...       [ ok ]   │
+ * Creating user login records ...         [ ok ]   │
+ * Starting dbus ...                       [ ok ]   │
+ * Starting elogind ...                    [ ok ]   │
+ * Setting up sysusers.d entries ...       [ ok ]   │
+ * Setting up tmpfiles.d entries ...       [ ok ]   │
+ * Setting hostname ...                    [ ok ]   │
+ * Loading key mappings [us] ...           [ ok ]   │
+ * Bringing up interface lo ...            [ ok ]   │
+ * Seeding random number generator ...     [ ok ]   │
+ * Starting default runlevel ...           [ ok ]   │
+ * Starting local ...                      [ ok ]   │
+                                                    ▼
+[login prompt — t=82,892 ms]
 ```
 
-### What systemd is doing for those 77,913 ms
+### What systemd is doing for those 34 seconds
 
-The 43 s kernel boot is the archiso initramfs (226 MB) being decompressed and the
-squashfs live root being mounted before PID 1 is exec'd. Systemd then runs in parallel
-where it can, but a chain of mandatory targets still sequences startup:
+Systemd runs services in parallel where it can, but mandatory targets still sequence
+startup into ordered stages:
 
 ```
 [systemd[1] exec — t=0 relative]
-  Remount root and kernel filesystems ...     [ ok ]   │
-  Coldplug all udev devices ...               [ ok ]   │
-  Load kernel modules ...                     [ ok ]   │  each target must be
-  Rebuild dynamic linker cache ...            [ ok ]   │  reached before the
-  System Initialization ...                   [ ok ]   │  next begins
-  D-Bus System Message Bus ...                [ ok ]   │
-  Basic System ...                            [ ok ]   │
-  Generate SSH host keys ...                  [ ok ]   │
-  Network ...                                 [ ok ]   │
-  Permit User Sessions ...                    [ ok ]   │
-  Serial Getty on ttyS0 ...                   [ ok ]   │
-                                                       ▼
-[archiso login: — t=77,913 ms]
+  [ OK ] Created slices, sockets, mount units     │  early setup in parallel
+  [ OK ] System Initialization target             │  must reach before continuing
+  [ OK ] Coldplug udev devices                    │
+  [ OK ] D-Bus System Message Bus                 │  each target must be reached
+  [ OK ] Basic System target                      │  before dependent units start
+  [ OK ] Network Manager                          │
+  [ OK ] OpenSSH Daemon                           │
+  [ OK ] Permit User Sessions                     │
+  [ OK ] Serial Getty on ttyS0                    │
+                                                  ▼
+[arch-systemd login: — t=34,362 ms]
 ```
-
-> **Note:** "Rebuild dynamic linker cache" and "Generate SSH host keys" are live-ISO
-> one-time tasks; they do not run on every boot of an installed system.
 
 ### What flint-init is doing for those 760 ms
 
@@ -257,12 +251,13 @@ dependencies in the service graph, so it starts at t=0 and the user sees a promp
 under a second while everything else initialises in the background. The binary cache
 (services.bin) eliminates TOML parsing at boot entirely on warm starts.
 
-> **Measurement method:** all VMs started with `date +%s%N`, serial output captured
-> to a file, `grep` polled until target strings appeared (`scripts/measure-systemd-boot.sh`
-> for the Arch/systemd run). Kernel boot times differ because Alpine uses a stripped
-> virt kernel, Arch uses a full desktop kernel with a 226 MB live initramfs, and Artix
-> boots directly from a disk image with no initramfs at all. Both live-ISO baselines
-> include overhead not present on installed systems.
+> **Measurement method:** QEMU launched with `date +%s%N`, serial output captured to a
+> file, polled until the login prompt appeared on ttyS0. All three VMs use the host
+> kernel directly (`-kernel /boot/vmlinuz-linux`), no initramfs, virtio disk. Scripts:
+> `scripts/measure-openrc-installed.sh`, `scripts/measure-systemd-installed.sh`,
+> `scripts/boot-artix-vm.sh`. The kernel boot times differ slightly because the disk
+> images are different ages (flint-init's artix.qcow2 has been booted many times;
+> the comparison VMs are freshly created), but all run the same kernel binary.
 
 ---
 
