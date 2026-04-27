@@ -18,7 +18,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DISK_IMAGE="${1:-$REPO_ROOT/artix.qcow2}"
 KERNEL="/boot/vmlinuz-linux"
 SERIAL_LOG="/tmp/openrc-artix-serial.txt"
-TIMEOUT=120  # seconds
+TIMEOUT=180  # seconds
 
 if [ ! -f "$DISK_IMAGE" ]; then
     echo "error: disk image not found: $DISK_IMAGE"
@@ -100,21 +100,19 @@ else
     fi
 fi
 
-# Also enable a default runlevel symlink for agetty if the service exists
-AGETTY_INIT="$MOUNT_DIR/etc/init.d/agetty.ttyS0"
-AGETTY_DEFAULT="$MOUNT_DIR/etc/runlevels/default/agetty.ttyS0"
-if [ ! -e "$AGETTY_DEFAULT" ] && [ -d "$MOUNT_DIR/etc/init.d" ]; then
-    # On some Artix installs, agetty is managed as a separate init.d service
-    # rather than inittab. Check for it.
-    if [ -f "$MOUNT_DIR/etc/init.d/agetty" ]; then
-        mkdir -p "$MOUNT_DIR/etc/runlevels/default"
-        # Create a per-tty service symlink if the pattern exists
-        if [ ! -e "$MOUNT_DIR/etc/runlevels/default/agetty" ]; then
-            ln -sf /etc/init.d/agetty "$MOUNT_DIR/etc/runlevels/default/agetty" 2>/dev/null || true
-            echo "[measure] enabled agetty in default runlevel"
-        fi
-    fi
+# Ensure agetty.ttyS0 OpenRC service exists (symlink to agetty script).
+# Never add the generic 'agetty' service — it requires a port-specific symlink name.
+if [ ! -e "$MOUNT_DIR/etc/init.d/agetty.ttyS0" ] && [ -f "$MOUNT_DIR/etc/init.d/agetty" ]; then
+    ln -sf /etc/init.d/agetty "$MOUNT_DIR/etc/init.d/agetty.ttyS0"
+    echo "[measure] created /etc/init.d/agetty.ttyS0 symlink"
 fi
+if [ ! -e "$MOUNT_DIR/etc/runlevels/default/agetty.ttyS0" ] && [ -e "$MOUNT_DIR/etc/init.d/agetty.ttyS0" ]; then
+    mkdir -p "$MOUNT_DIR/etc/runlevels/default"
+    ln -sf /etc/init.d/agetty.ttyS0 "$MOUNT_DIR/etc/runlevels/default/agetty.ttyS0"
+    echo "[measure] enabled agetty.ttyS0 in default runlevel"
+fi
+# Remove generic agetty if it was added previously — it always fails
+rm -f "$MOUNT_DIR/etc/runlevels/default/agetty"
 
 sync
 umount "$MOUNT_DIR"

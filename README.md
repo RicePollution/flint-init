@@ -165,47 +165,46 @@ PID 1 is exec'd to the moment a login prompt appears on the serial console.
 
 | System | Kernel | Kernel boot | Userspace (PID 1 → login) | Total |
 |--------|--------|-------------|---------------------------|-------|
-| OpenRC 0.63.1 (Artix, installed) | 6.19.11 artix | 14,919 ms | **82,892 ms** | 97,811 ms |
+| OpenRC 0.63.1 (Artix, installed, rc_parallel) | 6.19.11 artix | ~8,500 ms | **~52,000 ms** | ~61,000 ms |
 | systemd 260 (Arch, installed) | 6.19.11 artix | 11,075 ms | **34,362 ms** | 45,437 ms |
 | flint-init (Artix, 32 services, warm cache) | 6.19.11 artix | 7,419 ms | **760 ms** | 8,179 ms |
 
-**flint-init reaches a login prompt 45× faster than systemd and 109× faster than OpenRC
+**flint-init reaches a login prompt 45× faster than systemd and ~68× faster than OpenRC
 from PID 1 exec.** All three run the same kernel on equivalent installed systems, so the
 userspace column is a direct measure of each init system's overhead with no live-ISO
 noise. flint-init's 760 ms includes all 32 services beginning to start; agetty has no
 dependencies in the service graph so the login prompt appears at t=0 while the rest
 initialise in the background.
 
+OpenRC userspace measurements ranged 36–73 s across three runs (median ~52 s); the
+variance comes from NetworkManager's DHCP/connectivity check in QEMU taking 11–15 s and
+QEMU scheduling noise. The median is used above. The core reason login is slow is
+architectural: the default runlevel must complete — including NetworkManager becoming
+active — before agetty starts. flint-init avoids this entirely because agetty carries no
+service dependencies.
+
 The warm binary cache (see § Binary Config Cache) loads service definitions in 17–28 ms
 instead of 114 ms cold, saving ~90 ms off the userspace total.
 
-### What OpenRC is doing for those 82 seconds
+### What OpenRC is doing for those ~52 seconds
 
-The entire init sequence runs serially — each step must finish before the next begins,
-even when they are completely independent of each other:
+With `rc_parallel="YES"`, independent services in the same runlevel start concurrently.
+Even so, the runlevel itself is a gate — the login prompt cannot appear until the entire
+default runlevel finishes, which includes waiting for NetworkManager to attempt and
+eventually abandon a DHCP lease (~11–15 s in QEMU):
 
 ```
 [openrc-init exec — t=0 relative]
- * Mounting /proc, /sys, /run ...          [ ok ]   │
- * Caching service dependencies ...        [ ok ]   │
- * Mounting security/debug/bpf fs ...      [ ok ]   │  one at a time,
- * Checking local filesystems ...          [ ok ]   │  every step blocks
- * Remounting filesystems ...              [ ok ]   │  the next
- * Mounting local filesystems ...          [ ok ]   │
- * Configuring kernel parameters ...       [ ok ]   │
- * Creating user login records ...         [ ok ]   │
- * Starting dbus ...                       [ ok ]   │
- * Starting elogind ...                    [ ok ]   │
- * Setting up sysusers.d entries ...       [ ok ]   │
- * Setting up tmpfiles.d entries ...       [ ok ]   │
- * Setting hostname ...                    [ ok ]   │
- * Loading key mappings [us] ...           [ ok ]   │
- * Bringing up interface lo ...            [ ok ]   │
- * Seeding random number generator ...     [ ok ]   │
- * Starting default runlevel ...           [ ok ]   │
- * Starting local ...                      [ ok ]   │
+  boot runlevel (parallel):
+    hwclock, sysctl, loopback, hostname  ━━━ done  │
+    fsck, localmount, mtab               ━━━━ done  │  boot runlevel must
+    seedrng, esysusers, etmpfiles        ━━━━ done  │  complete before
+    bootmisc, keymaps, net.lo            ━━━━ done  │  default begins
                                                     ▼
-[login prompt — t=82,892 ms]
+  default runlevel (parallel):
+    dbus + elogind                       ━━━━━━━━━━━━━━━━━ done
+    NetworkManager ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ inactive (DHCP timeout ~11s)
+    agetty.ttyS0   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ waits for runlevel ─ ─ ─ ─ LOGIN ◄── t≈52s
 ```
 
 ### What systemd is doing for those 34 seconds

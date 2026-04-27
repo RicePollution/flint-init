@@ -57,10 +57,11 @@ mkfs.ext4 -F "${NBD_DEV}p1"
 echo "[create-openrc-vm] mounting..."
 mount "${NBD_DEV}p1" "$MOUNT_DIR"
 
-echo "[create-openrc-vm] running pacstrap (base elogind-openrc iptables openssh syslog-ng networkmanager)..."
+echo "[create-openrc-vm] running pacstrap (base linux elogind-openrc iptables openssh syslog-ng networkmanager networkmanager-openrc)..."
+# linux: provides /lib/modules matching the host kernel — udev needs this for coldplug.
+# networkmanager-openrc: provides /etc/init.d/NetworkManager for OpenRC.
 # Explicit elogind-openrc and iptables to avoid interactive provider prompts.
-# 'base' on Artix OpenRC host pulls in openrc + artix-base-openrc.
-pacstrap -K "$MOUNT_DIR" base elogind-openrc iptables openssh syslog-ng networkmanager
+pacstrap -K "$MOUNT_DIR" base linux elogind-openrc iptables openssh syslog-ng networkmanager networkmanager-openrc
 
 echo "[create-openrc-vm] writing /etc/fstab..."
 cat > "$MOUNT_DIR/etc/fstab" << 'EOF'
@@ -107,14 +108,28 @@ INITTAB_EOF
     echo "[create-openrc-vm] /etc/inittab created"
 fi
 
-# ---- Enable network services in OpenRC default runlevel ----
+# ---- Enable services in OpenRC runlevels ----
 echo "[create-openrc-vm] enabling services in default runlevel..."
-for svc in syslog-ng networkmanager sshd; do
+for svc in syslog-ng NetworkManager sshd; do
     if [ -f "$MOUNT_DIR/etc/init.d/$svc" ]; then
         ln -sf "/etc/init.d/$svc" "$MOUNT_DIR/etc/runlevels/default/$svc" 2>/dev/null || true
         echo "[create-openrc-vm]   enabled: $svc"
     fi
 done
+
+# Remove the broken generic agetty symlink that causes "cannot be started directly" error
+rm -f "$MOUNT_DIR/etc/runlevels/default/agetty"
+echo "[create-openrc-vm] removed spurious generic agetty from default runlevel"
+
+# Remove netmount — it depends on 'net' (netifrc interface services) which we don't have.
+# On a minimal VM without NFS, netmount serves no purpose and causes a dependency error.
+rm -f "$MOUNT_DIR/etc/runlevels/default/netmount"
+echo "[create-openrc-vm] removed netmount from default runlevel (no net.ethX configured)"
+
+# Enable rc_parallel so OpenRC starts independent services simultaneously —
+# this is the recommended setting for modern hardware and a fair comparison.
+sed -i 's|^#rc_parallel="NO"|rc_parallel="YES"|' "$MOUNT_DIR/etc/rc.conf"
+echo "[create-openrc-vm] enabled rc_parallel"
 
 sync
 echo "[create-openrc-vm] done. Image: $DISK_IMAGE"
