@@ -155,36 +155,27 @@ $ flint-ctl stop networkmanager
 
 ## Boot Time Comparison
 
-All three systems measured on the same host (i7-12700K) in QEMU with the **same
-configuration**: host kernel (`/boot/vmlinuz-linux`, 6.19.11-artix1-1), no initramfs,
-virtio disk, 512 MB RAM, 2 vCPUs, serial console. Each is an **installed disk image**
-(not a live ISO), created fresh for this test. Times are from QEMU launch.
+Measured on the **same disk image** (`artix-openrc.qcow2`) with the **same kernel and
+services** — only the init system changes. Host: i7-12700K, QEMU with KVM, host kernel
+(`/boot/vmlinuz-linux`, 6.19.11-artix1-1), no initramfs, virtio disk, 512 MB RAM, 2 vCPUs,
+serial console.
 
-The **userspace time** column isolates the init system — it is measured from the moment
-PID 1 is exec'd to the moment a login prompt appears on the serial console.
+The **userspace time** column isolates the init system — measured from the moment PID 1
+is exec'd to the moment a login prompt appears on the serial console. Averaged over 5
+runs via `scripts/measure-flint-installed.sh` and `scripts/measure-openrc-installed.sh`.
 
-| System | Kernel | Kernel boot | Userspace (PID 1 → login) | Total |
-|--------|--------|-------------|---------------------------|-------|
-| OpenRC 0.63.1 (Artix, installed, rc_parallel) | 6.19.11 artix | ~8,500 ms | **~52,000 ms** | ~61,000 ms |
-| systemd 260 (Arch, installed) | 6.19.11 artix | 11,075 ms | **34,362 ms** | 45,437 ms |
-| flint-init (Artix, 32 services, warm cache) | 6.19.11 artix | 7,419 ms | **760 ms** | 8,179 ms |
+| System | Kernel | Userspace (PID 1 → login) | Total |
+|--------|--------|---------------------------|-------|
+| OpenRC 0.63.1 (Artix, rc_parallel) | 6.19.11-artix1-1 | **5,134 ms** | 6,620 ms |
+| **flint-init** (Artix, 32 services) | 6.19.11-artix1-1 | **759 ms** | 2,088 ms |
 
-**flint-init reaches a login prompt 45× faster than systemd and ~68× faster than OpenRC
-from PID 1 exec.** All three run the same kernel on equivalent installed systems, so the
-userspace column is a direct measure of each init system's overhead with no live-ISO
-noise. flint-init's 760 ms includes all 32 services beginning to start; agetty has no
-dependencies in the service graph so the login prompt appears at t=0 while the rest
-initialise in the background.
+**flint-init reaches a login prompt 6.8× faster than OpenRC from PID 1 exec** on
+identical hardware, kernel, and service set. flint-init's 759 ms includes all 32
+services beginning to start; agetty has no dependencies in the service graph so the
+login prompt appears immediately while everything else initialises in the background.
 
-OpenRC userspace measurements ranged 36–73 s across three runs (median ~52 s); the
-variance comes from NetworkManager's DHCP/connectivity check in QEMU taking 11–15 s and
-QEMU scheduling noise. The median is used above. The core reason login is slow is
-architectural: the default runlevel must complete — including NetworkManager becoming
-active — before agetty starts. flint-init avoids this entirely because agetty carries no
-service dependencies.
-
-The warm binary cache (see § Binary Config Cache) loads service definitions in 17–28 ms
-instead of 114 ms cold, saving ~90 ms off the userspace total.
+OpenRC's 5,134 ms is architectural: the default runlevel is a gate — agetty cannot start
+until the entire runlevel completes, including NetworkManager's connectivity check.
 
 ### What OpenRC is doing for those ~52 seconds
 
@@ -324,6 +315,7 @@ fails quietly without respawn attempts.
 | 3 | Service restart logic, socket connection probing, flint-ctl | v0.3.x | Complete |
 | 4 | fstab mounts, graceful unmount, real Artix disk image boot | v0.4.x | Complete |
 | 5 | Binary config cache, flint-watch inotify daemon, 4.9× faster warm boot | v0.4.17 | Complete |
+| 6 | `install.sh` — single-command installer, GitHub release, bats test suite | v0.5.x | Complete |
 
 ---
 
@@ -342,13 +334,29 @@ Requirements: Rust 1.75+, Linux (uses inotify, fork/exec, nix syscalls).
 cargo test   # 50 unit + integration tests, no root required
 ```
 
+## Installing
+
+```bash
+# On a running Artix/Arch system:
+curl -fsSL https://raw.githubusercontent.com/RicePollution/flint-init/main/install.sh | sudo bash
+
+# Or into a mounted root (e.g. a QEMU disk image):
+sudo bash install.sh --root /mnt/artix
+```
+
+Then add `init=/usr/sbin/flint-init` to your kernel parameters and reboot.
+
 ## QEMU Tests
 
 ```bash
 # Full Artix disk image — 32 services, flint-init as PID 1 (primary test):
-sudo bash scripts/create-artix-vm.sh     # one-time setup, ~5 min
+sudo bash scripts/create-artix-vm.sh        # one-time setup, ~5 min
 sudo bash scripts/install-flint-into-vm.sh  # install/update binaries
-bash scripts/boot-artix-vm.sh            # boots and tails serial log
+bash scripts/boot-artix-vm.sh               # boots and tails serial log
+
+# Boot time measurements (5-run mean):
+bash scripts/measure-flint-installed.sh artix-openrc.qcow2
+sudo bash scripts/measure-openrc-installed.sh artix-openrc.qcow2
 
 # Initramfs boot — udev, dbus, NetworkManager (lighter, no disk image):
 bash scripts/qemu-test.sh
