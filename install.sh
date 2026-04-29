@@ -144,7 +144,10 @@ INSTRUCTIONS
 
 configure_bootloader() {
     if [ -f "$ROOT/etc/default/grub" ] && command -v grub-mkconfig &>/dev/null; then
-        _configure_grub
+        _configure_grub || {
+            echo "[flint-install] warning: GRUB auto-config failed, see instructions below" >&2
+            _print_bootloader_instructions
+        }
     else
         _print_bootloader_instructions
     fi
