@@ -136,3 +136,29 @@ teardown() {
     install_files
     [ ! -f "$TMPROOT/etc/flint/services/nginx.toml" ]
 }
+
+@test "configure_bootloader: writes /etc/grub.d/99-flint and calls grub-mkconfig" {
+    # Fake GRUB environment in TMPROOT
+    mkdir -p "$TMPROOT/etc/grub.d"
+    mkdir -p "$TMPROOT/etc/default"
+    echo 'GRUB_CMDLINE_LINUX_DEFAULT="quiet"' > "$TMPROOT/etc/default/grub"
+    ROOT="$TMPROOT"
+
+    # Stub grub-mkconfig
+    grub-mkconfig() { echo "grub-mkconfig called: $*"; }
+    export -f grub-mkconfig
+
+    configure_bootloader
+    [ -f "$TMPROOT/etc/grub.d/99-flint" ]
+    [ -x "$TMPROOT/etc/grub.d/99-flint" ]
+    grep -q "init=/usr/sbin/flint-init" "$TMPROOT/etc/grub.d/99-flint"
+}
+
+@test "configure_bootloader: skips GRUB auto-config in --root mode" {
+    ROOT="$TMPROOT"   # non-/ root triggers print-only path
+    mkdir -p "$TMPROOT/etc/grub.d"
+    run configure_bootloader
+    [ "$status" -eq 0 ]
+    [ ! -f "$TMPROOT/etc/grub.d/99-flint" ]
+    [[ "$output" == *"init=/usr/sbin/flint-init"* ]]
+}

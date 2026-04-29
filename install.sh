@@ -93,6 +93,63 @@ install_files() {
     fi
 }
 
+_configure_grub() {
+    echo "[flint-install] configuring GRUB..."
+    local entry_file="$ROOT/etc/grub.d/99-flint"
+    local cmdline
+    cmdline=$(grep 'GRUB_CMDLINE_LINUX_DEFAULT' "$ROOT/etc/default/grub" \
+              | sed 's/.*="\(.*\)"/\1/')
+
+    cat > "$entry_file" << 'GRUB_ENTRY'
+#!/bin/sh
+exec tail -n +3 $0
+menuentry 'Linux, with flint-init' {
+    search --no-floppy --fs-uuid --set=root $(findmnt -n -o UUID /)
+    linux   $(ls /boot/vmlinuz-linux) root=UUID=$(findmnt -n -o UUID /) rw CMDLINE init=/usr/sbin/flint-init
+    initrd  $(ls /boot/initramfs-linux.img)
+}
+GRUB_ENTRY
+    # Substitute the actual cmdline
+    sed -i "s/CMDLINE/$cmdline/" "$entry_file"
+    chmod +x "$entry_file"
+    grub-mkconfig -o "$ROOT/boot/grub/grub.cfg"
+    echo "[flint-install] GRUB entry written [ok]"
+}
+
+_print_bootloader_instructions() {
+    cat << 'INSTRUCTIONS'
+
+==========================================
+  Bootloader configuration
+==========================================
+
+Add this to your kernel parameters:
+
+  init=/usr/sbin/flint-init
+
+systemd-boot:
+  Edit /boot/loader/entries/<your-entry>.conf
+  Append 'init=/usr/sbin/flint-init' to the 'options' line
+
+rEFInd:
+  Edit /boot/refind_linux.conf
+  Append 'init=/usr/sbin/flint-init' to your boot stanza options line
+
+GRUB (manual):
+  Edit /etc/default/grub — add to GRUB_CMDLINE_LINUX
+  Then run: grub-mkconfig -o /boot/grub/grub.cfg
+
+INSTRUCTIONS
+}
+
+configure_bootloader() {
+    if [ -f "$ROOT/etc/default/grub" ] && command -v grub-mkconfig &>/dev/null; then
+        _configure_grub
+    else
+        _print_bootloader_instructions
+    fi
+}
+
 _download_release() {
     local tmpdir="$1"
     local arch="x86_64"
