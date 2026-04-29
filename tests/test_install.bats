@@ -162,3 +162,10 @@ teardown() {
     [ ! -f "$TMPROOT/etc/grub.d/99-flint" ]
     [[ "$output" == *"init=/usr/sbin/flint-init"* ]]
 }
+
+@test "main: parses --root flag" {
+    run bash "$REPO_ROOT/install.sh" --root /nonexistent 2>&1 || true
+    # Should fail at check_root (not root in test), not at arg parsing
+    # If it fails with "unknown option" the parsing is broken
+    [[ "$output" != *"unknown option"* ]]
+}

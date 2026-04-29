@@ -201,6 +201,50 @@ acquire_binary() {
     esac
 }
 
+print_summary() {
+    echo ""
+    echo "=========================================="
+    echo "  flint-init installed"
+    echo "=========================================="
+    echo ""
+    echo "Installed to: $ROOT"
+    echo "  $ROOT/usr/sbin/flint-init"
+    echo "  $ROOT/usr/bin/flint-ctl"
+    echo "  $ROOT/etc/flint/services/"
+    echo ""
+    echo "To TEST (one boot, non-destructive):"
+    echo "  At your bootloader, add to kernel parameters:"
+    echo "    init=/usr/sbin/flint-init"
+    echo "  Boot normally if anything goes wrong — just remove the parameter."
+    echo ""
+    echo "To make PERMANENT:"
+    echo "  GRUB: set the 'Linux, with flint-init' entry as default"
+    echo "  Other: make the init= parameter part of your default boot entry"
+    echo ""
+    echo "To REVERT:"
+    echo "  Remove 'init=/usr/sbin/flint-init' from kernel parameters"
+    echo "  GRUB: sudo rm /etc/grub.d/99-flint && sudo grub-mkconfig -o /boot/grub/grub.cfg"
+    echo ""
+}
+
+main() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --root)     ROOT="$2"; shift 2 ;;
+            --build)    ACQUIRE_MODE=build; shift ;;
+            --download) ACQUIRE_MODE=download; shift ;;
+            *) echo "[flint-install] error: unknown option: $1" >&2; exit 1 ;;
+        esac
+    done
+
+    check_root
+    detect_distro
+    acquire_binary
+    install_files
+    configure_bootloader
+    print_summary
+}
+
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi
