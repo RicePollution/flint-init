@@ -42,6 +42,7 @@ echo "[measure] timeout: ${TIMEOUT}s"
 T0_NS=$(date +%s%N)
 
 qemu-system-x86_64 \
+    -enable-kvm \
     -drive "file=$DISK_IMAGE,if=virtio,format=qcow2" \
     -kernel "$KERNEL" \
     -append "root=/dev/vda1 rw init=/usr/lib/systemd/systemd console=ttyS0 loglevel=3 systemd.show_status=1" \

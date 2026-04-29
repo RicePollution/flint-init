@@ -167,15 +167,17 @@ runs via `scripts/measure-flint-installed.sh` and `scripts/measure-openrc-instal
 | System | Kernel | Userspace (PID 1 → login) | Total |
 |--------|--------|---------------------------|-------|
 | OpenRC 0.63.1 (Artix, rc_parallel) | 6.19.11-artix1-1 | **5,134 ms** | 6,620 ms |
+| systemd 260 (Arch) | 6.19.11-artix1-1 | **5,038 ms** | 7,582 ms |
 | **flint-init** (Artix, 32 services) | 6.19.11-artix1-1 | **759 ms** | 2,088 ms |
 
-**flint-init reaches a login prompt 6.8× faster than OpenRC from PID 1 exec** on
-identical hardware, kernel, and service set. flint-init's 759 ms includes all 32
-services beginning to start; agetty has no dependencies in the service graph so the
-login prompt appears immediately while everything else initialises in the background.
+**flint-init reaches a login prompt 6.8× faster than OpenRC and 6.6× faster than
+systemd from PID 1 exec** on the same kernel with equivalent service sets. flint-init's
+759 ms includes all 32 services beginning to start; agetty has no dependencies in the
+service graph so the login prompt appears immediately while everything else initialises
+in the background.
 
-OpenRC's 5,134 ms is architectural: the default runlevel is a gate — agetty cannot start
-until the entire runlevel completes, including NetworkManager's connectivity check.
+OpenRC and systemd both gate the login prompt behind service startup completion.
+flint-init avoids this entirely — agetty carries no dependencies so it starts at t=0.
 
 ### What OpenRC is doing for those ~52 seconds
 
