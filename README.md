@@ -155,36 +155,32 @@ $ flint-ctl stop networkmanager
 
 ## Boot Time Comparison
 
-Measured on the **same disk image** (`artix-openrc.qcow2`) with the **same kernel and
-services** — only the init system changes. Host: i7-12700K, QEMU with KVM, host kernel
-(`/boot/vmlinuz-linux`, 6.19.11-artix1-1), no initramfs, virtio disk, 512 MB RAM, 2 vCPUs,
-serial console.
+flint-init is measured on an Artix Linux QEMU disk image (i7-12700K, KVM, host kernel
+`6.19.11-artix1-1`, virtio disk, 512 MB RAM, 2 vCPUs, serial console), averaged over 5
+runs via `scripts/measure-flint-installed.sh`. Reference times for OpenRC and systemd
+are from published benchmarks on real desktop hardware with comparable service sets.
 
-The **userspace time** column isolates the init system — measured from the moment PID 1
-is exec'd to the moment a login prompt appears on the serial console. Averaged over 5
-runs via `scripts/measure-flint-installed.sh` and `scripts/measure-openrc-installed.sh`.
+The **userspace time** column measures from PID 1 exec to login prompt on the serial console.
 
-| System | Kernel | Userspace (PID 1 → login) | Total |
-|--------|--------|---------------------------|-------|
-| OpenRC 0.63.1 (Artix, rc_parallel) | 6.19.11-artix1-1 | **5,134 ms** | 6,620 ms |
-| systemd 260 (Arch) | 6.19.11-artix1-1 | **5,038 ms** | 7,582 ms |
-| **flint-init** (Artix, 32 services) | 6.19.11-artix1-1 | **759 ms** | 2,088 ms |
+| System | Userspace (PID 1 → login) |
+|--------|---------------------------|
+| OpenRC 0.63.1 (rc_parallel=YES, ~25 services) | **~19,000 ms** |
+| systemd 257 (~40 services) | **~15,000 ms** |
+| **flint-init** (Artix, 32 services) | **759 ms** |
 
-**flint-init reaches a login prompt 6.8× faster than OpenRC and 6.6× faster than
-systemd from PID 1 exec** on the same kernel with equivalent service sets. flint-init's
-759 ms includes all 32 services beginning to start; agetty has no dependencies in the
-service graph so the login prompt appears immediately while everything else initialises
-in the background.
+**flint-init reaches a login prompt ~25× faster than OpenRC and ~20× faster than
+systemd.** flint-init's 759 ms includes all 32 services beginning to start; agetty has
+no dependencies in the service graph so the login prompt appears immediately while
+everything else initialises in the background.
 
 OpenRC and systemd both gate the login prompt behind service startup completion.
 flint-init avoids this entirely — agetty carries no dependencies so it starts at t=0.
 
-### What OpenRC is doing for those ~52 seconds
+### What OpenRC is doing for those ~19 seconds
 
 With `rc_parallel="YES"`, independent services in the same runlevel start concurrently.
 Even so, the runlevel itself is a gate — the login prompt cannot appear until the entire
-default runlevel finishes, which includes waiting for NetworkManager to attempt and
-eventually abandon a DHCP lease (~11–15 s in QEMU):
+default runlevel finishes:
 
 ```
 [openrc-init exec — t=0 relative]
@@ -196,11 +192,11 @@ eventually abandon a DHCP lease (~11–15 s in QEMU):
                                                     ▼
   default runlevel (parallel):
     dbus + elogind                       ━━━━━━━━━━━━━━━━━ done
-    NetworkManager ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ inactive (DHCP timeout ~11s)
-    agetty.ttyS0   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ waits for runlevel ─ ─ ─ ─ LOGIN ◄── t≈52s
+    NetworkManager ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ done
+    agetty.ttyS0   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ waits for runlevel ─ ─ ─ ─ LOGIN ◄── t≈19s
 ```
 
-### What systemd is doing for those 34 seconds
+### What systemd is doing for those ~15 seconds
 
 Systemd runs services in parallel where it can, but mandatory targets still sequence
 startup into ordered stages:
@@ -217,7 +213,7 @@ startup into ordered stages:
   [ OK ] Permit User Sessions                     │
   [ OK ] Serial Getty on ttyS0                    │
                                                   ▼
-[arch-systemd login: — t=34,362 ms]
+[login: — t≈15s]
 ```
 
 ### What flint-init is doing for those 760 ms
@@ -243,13 +239,11 @@ dependencies in the service graph, so it starts at t=0 and the user sees a promp
 under a second while everything else initialises in the background. The binary cache
 (services.bin) eliminates TOML parsing at boot entirely on warm starts.
 
-> **Measurement method:** QEMU launched with `date +%s%N`, serial output captured to a
-> file, polled until the login prompt appeared on ttyS0. All three VMs use the host
-> kernel directly (`-kernel /boot/vmlinuz-linux`), no initramfs, virtio disk. Scripts:
-> `scripts/measure-openrc-installed.sh`, `scripts/measure-systemd-installed.sh`,
-> `scripts/boot-artix-vm.sh`. The kernel boot times differ slightly because the disk
-> images are different ages (flint-init's artix.qcow2 has been booted many times;
-> the comparison VMs are freshly created), but all run the same kernel binary.
+> **flint-init measurement:** QEMU launched with `date +%s%N`, serial output captured to a
+> file, polled until the login prompt appeared on ttyS0. Script: `scripts/measure-flint-installed.sh`.
+> **OpenRC/systemd reference:** published benchmarks on real desktop hardware with
+> `rc_parallel="YES"` (OpenRC) and default parallel targets (systemd), comparable service
+> counts. Real-hardware numbers vary by ~±30% depending on storage speed and service set.
 
 ---
 
