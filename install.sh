@@ -63,16 +63,15 @@ install_files() {
     echo "[flint-install]   $ROOT/usr/sbin/flint-init [ok]"
     echo "[flint-install]   $ROOT/usr/bin/flint-ctl [ok]"
 
-    echo "[flint-install] installing reboot/poweroff wrappers..."
+    echo "[flint-install] installing flint-reboot..."
     cat > "$ROOT/usr/sbin/flint-reboot" << 'REBOOT_SCRIPT'
 #!/bin/sh
-# Send SIGUSR1 to flint-init (PID 1) to trigger graceful reboot
+# Graceful reboot via flint-init: send SIGUSR1 to PID 1
 kill -USR1 1
 REBOOT_SCRIPT
     chmod +x "$ROOT/usr/sbin/flint-reboot"
-    ln -sf /usr/sbin/flint-reboot "$ROOT/usr/sbin/reboot" 2>/dev/null || \
-        cp "$ROOT/usr/sbin/flint-reboot" "$ROOT/usr/sbin/reboot"
-    echo "[flint-install]   $ROOT/usr/sbin/reboot [ok]"
+    echo "[flint-install]   $ROOT/usr/sbin/flint-reboot [ok]"
+    echo "[flint-install]   (run 'flint-reboot' or 'kill -USR1 1' to reboot)"
 
     local svc_dir="$REPO_ROOT/services/$DISTRO"
     if [ ! -d "$svc_dir" ]; then
@@ -107,23 +106,26 @@ REBOOT_SCRIPT
 _configure_grub() {
     echo "[flint-install] configuring GRUB..."
     local entry_file="$ROOT/etc/grub.d/99-flint"
-    local cmdline
+    local cmdline kernel initrd root_uuid
     cmdline=$(grep 'GRUB_CMDLINE_LINUX_DEFAULT' "$ROOT/etc/default/grub" \
               | sed 's/.*="\(.*\)"/\1/')
+    kernel=$(ls "${ROOT}/boot/vmlinuz-linux" 2>/dev/null | head -1 | sed "s|^${ROOT}||")
+    initrd=$(ls "${ROOT}/boot/initramfs-linux.img" 2>/dev/null | head -1 | sed "s|^${ROOT}||")
+    root_uuid=$(findmnt -n -o UUID "${ROOT:-/}" 2>/dev/null)
 
-    cat > "$entry_file" << 'GRUB_ENTRY'
-#!/bin/sh
-exec tail -n +3 $0
-menuentry 'Linux, with flint-init' {
-    search --no-floppy --fs-uuid --set=root $(findmnt -n -o UUID /)
-    linux   $(ls /boot/vmlinuz-linux) root=UUID=$(findmnt -n -o UUID /) rw CMDLINE init=/usr/sbin/flint-init
-    initrd  $(ls /boot/initramfs-linux.img)
-}
-GRUB_ENTRY
-    # Substitute the actual cmdline
-    sed -i "s/CMDLINE/$cmdline/" "$entry_file"
+    # Write a grub.d shell script — grub-mkconfig runs it and captures stdout
+    {
+        echo '#!/bin/sh'
+        echo 'cat << '"'"'GRUB_EOF'"'"
+        echo "menuentry 'Linux, with flint-init' {"
+        echo "    search --no-floppy --fs-uuid --set=root ${root_uuid}"
+        echo "    linux   ${kernel} root=UUID=${root_uuid} rw ${cmdline} init=/usr/sbin/flint-init"
+        echo "    initrd  ${initrd}"
+        echo "}"
+        echo 'GRUB_EOF'
+    } > "$entry_file"
     chmod +x "$entry_file"
-    grub-mkconfig -o "$ROOT/boot/grub/grub.cfg"
+    grub-mkconfig -o "${ROOT}/boot/grub/grub.cfg"
     echo "[flint-install] GRUB entry written [ok]"
 }
 
