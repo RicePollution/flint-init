@@ -63,15 +63,19 @@ install_files() {
     echo "[flint-install]   $ROOT/usr/sbin/flint-init [ok]"
     echo "[flint-install]   $ROOT/usr/bin/flint-ctl [ok]"
 
-    echo "[flint-install] installing flint-reboot..."
-    cat > "$ROOT/usr/sbin/flint-reboot" << 'REBOOT_SCRIPT'
+    echo "[flint-install] installing reboot wrapper..."
+    cat > "$ROOT/usr/sbin/reboot" << 'REBOOT_SCRIPT'
 #!/bin/sh
-# Graceful reboot via flint-init: send SIGUSR1 to PID 1
-kill -USR1 1
+# If flint-init is PID 1, send SIGUSR1 for graceful reboot.
+# Otherwise fall through to the real reboot binary.
+if readlink /proc/1/exe 2>/dev/null | grep -q flint-init; then
+    kill -USR1 1
+else
+    exec /usr/bin/reboot "$@"
+fi
 REBOOT_SCRIPT
-    chmod +x "$ROOT/usr/sbin/flint-reboot"
-    echo "[flint-install]   $ROOT/usr/sbin/flint-reboot [ok]"
-    echo "[flint-install]   (run 'flint-reboot' or 'kill -USR1 1' to reboot)"
+    chmod +x "$ROOT/usr/sbin/reboot"
+    echo "[flint-install]   $ROOT/usr/sbin/reboot [ok]"
 
     local svc_dir="$REPO_ROOT/services/$DISTRO"
     if [ ! -d "$svc_dir" ]; then
