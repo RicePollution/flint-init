@@ -64,6 +64,7 @@ install_files() {
     echo "[flint-install]   $ROOT/usr/bin/flint-ctl [ok]"
 
     echo "[flint-install] installing reboot wrapper..."
+    rm -f "$ROOT/usr/sbin/reboot"
     cat > "$ROOT/usr/sbin/reboot" << 'REBOOT_SCRIPT'
 #!/bin/sh
 # If flint-init is PID 1, send SIGUSR1 for graceful reboot.
