@@ -131,6 +131,7 @@ echo "[measure] serial log: $SERIAL_LOG"
 T0_NS=$(date +%s%N)
 
 qemu-system-x86_64 \
+    -enable-kvm \
     -drive "file=$DISK_IMAGE,if=virtio,format=qcow2" \
     -kernel "$KERNEL" \
     -append "root=/dev/vda1 rw init=/usr/bin/openrc-init console=ttyS0 loglevel=3" \
