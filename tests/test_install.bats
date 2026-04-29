@@ -107,3 +107,32 @@ teardown() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"no service definitions"* ]]
 }
+
+@test "install_files: installs common service when exec binary exists in ROOT" {
+    FLINT_BIN="$(mktemp)"
+    FLINT_CTL_BIN="$(mktemp)"
+    chmod +x "$FLINT_BIN" "$FLINT_CTL_BIN"
+    DISTRO=artix
+
+    # Plant a fake nginx binary in the target root
+    mkdir -p "$TMPROOT/usr/sbin"
+    echo '#!/bin/sh' > "$TMPROOT/usr/sbin/nginx"
+    chmod +x "$TMPROOT/usr/sbin/nginx"
+
+    # Override common dir to use our fixture
+    _FLINT_COMMON_DIR="$BATS_TEST_DIRNAME/fixtures"
+
+    install_files
+    [ -f "$TMPROOT/etc/flint/services/nginx.toml" ]
+}
+
+@test "install_files: skips common service when exec binary absent from ROOT" {
+    FLINT_BIN="$(mktemp)"
+    FLINT_CTL_BIN="$(mktemp)"
+    chmod +x "$FLINT_BIN" "$FLINT_CTL_BIN"
+    DISTRO=artix
+    _FLINT_COMMON_DIR="$BATS_TEST_DIRNAME/fixtures"
+    # nginx binary NOT present in TMPROOT
+    install_files
+    [ ! -f "$TMPROOT/etc/flint/services/nginx.toml" ]
+}

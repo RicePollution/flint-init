@@ -1,0 +1,8 @@
+[service]
+name = "nginx"
+exec = "/usr/sbin/nginx -g 'daemon off;'"
+restart = "on-failure"
+
+[ready]
+strategy = "socket"
+path = "/run/nginx.pid"

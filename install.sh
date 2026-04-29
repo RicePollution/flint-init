@@ -19,6 +19,7 @@ _ACQUIRE_TMPDIR=""
 
 # Overridable for tests
 _FLINT_OS_RELEASE="${_FLINT_OS_RELEASE:-/etc/os-release}"
+_FLINT_COMMON_DIR="${_FLINT_COMMON_DIR:-$REPO_ROOT/services/common}"
 
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
@@ -72,6 +73,24 @@ install_files() {
     mkdir -p "$ROOT/etc/flint/services"
     cp "$svc_dir"/*.toml "$ROOT/etc/flint/services/"
     echo "[flint-install]   $(ls "$svc_dir"/*.toml | wc -l) services installed [ok]"
+
+    if [ -d "$_FLINT_COMMON_DIR" ]; then
+        local installed_common=0
+        for toml in "$_FLINT_COMMON_DIR"/*.toml; do
+            [ -f "$toml" ] || continue
+            # Extract first word of exec value: exec = "/path/to/bin args..."
+            local exec_line exec_full exec_bin
+            exec_line=$(grep -E '^\s*exec\s*=' "$toml" | head -1)
+            exec_full=$(echo "$exec_line" | sed 's/.*=\s*"\([^"]*\)".*/\1/')
+            exec_bin=$(echo "$exec_full" | awk '{print $1}')
+            if [ -n "$exec_bin" ] && [ -x "$ROOT$exec_bin" ]; then
+                cp "$toml" "$ROOT/etc/flint/services/"
+                echo "[flint-install]   + $(basename "$toml") (common)"
+                installed_common=$((installed_common + 1))
+            fi
+        done
+        echo "[flint-install]   $installed_common common services installed [ok]"
+    fi
 }
 
 _download_release() {
