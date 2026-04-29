@@ -213,11 +213,15 @@ fn unmount_all() {
 
 /// Called after executor::run() returns (only when running as PID 1).
 ///
-/// Reads FLINT_ON_EXIT at call time:
-///   "halt"   → halt the machine
-///   "reboot" → reboot the machine
-///   anything else (or unset) → unmount and halt
-pub fn supervise_forever() -> ! {
+/// `reboot`: if true (SIGUSR1 was received), reboot instead of halt.
+/// Also reads FLINT_ON_EXIT env var as a fallback for test/scripted boots.
+pub fn supervise_forever(reboot: bool) -> ! {
+    if reboot {
+        unmount_all();
+        eprintln!("[pid1] rebooting");
+        let _ = nix::sys::reboot::reboot(nix::sys::reboot::RebootMode::RB_AUTOBOOT);
+    }
+
     match std::env::var("FLINT_ON_EXIT").as_deref() {
         Ok("halt") => {
             unmount_all();
@@ -230,8 +234,6 @@ pub fn supervise_forever() -> ! {
             let _ = nix::sys::reboot::reboot(nix::sys::reboot::RebootMode::RB_AUTOBOOT);
         }
         _ => {
-            // No explicit exit mode — on a real system this means all services
-            // exited on their own. Unmount and halt rather than spin forever.
             unmount_all();
             eprintln!("[pid1] all services done — halting");
             let _ = nix::sys::reboot::reboot(nix::sys::reboot::RebootMode::RB_HALT_SYSTEM);

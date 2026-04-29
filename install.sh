@@ -63,6 +63,17 @@ install_files() {
     echo "[flint-install]   $ROOT/usr/sbin/flint-init [ok]"
     echo "[flint-install]   $ROOT/usr/bin/flint-ctl [ok]"
 
+    echo "[flint-install] installing reboot/poweroff wrappers..."
+    cat > "$ROOT/usr/sbin/flint-reboot" << 'REBOOT_SCRIPT'
+#!/bin/sh
+# Send SIGUSR1 to flint-init (PID 1) to trigger graceful reboot
+kill -USR1 1
+REBOOT_SCRIPT
+    chmod +x "$ROOT/usr/sbin/flint-reboot"
+    ln -sf /usr/sbin/flint-reboot "$ROOT/usr/sbin/reboot" 2>/dev/null || \
+        cp "$ROOT/usr/sbin/flint-reboot" "$ROOT/usr/sbin/reboot"
+    echo "[flint-install]   $ROOT/usr/sbin/reboot [ok]"
+
     local svc_dir="$REPO_ROOT/services/$DISTRO"
     if [ ! -d "$svc_dir" ]; then
         echo "[flint-install] error: no service definitions for $DISTRO at $svc_dir" >&2

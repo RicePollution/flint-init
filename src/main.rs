@@ -17,8 +17,14 @@ use flint_init::cache;
 use flint_init::service::ReadyStrategy;
 
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+static REBOOT: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn handle_shutdown(_: std::ffi::c_int) {
+    SHUTDOWN.store(true, Ordering::SeqCst);
+}
+
+extern "C" fn handle_reboot(_: std::ffi::c_int) {
+    REBOOT.store(true, Ordering::SeqCst);
     SHUTDOWN.store(true, Ordering::SeqCst);
 }
 
@@ -31,6 +37,8 @@ fn main() -> Result<()> {
             .context("failed to install SIGTERM handler")?;
         signal(Signal::SIGINT, SigHandler::Handler(handle_shutdown))
             .context("failed to install SIGINT handler")?;
+        signal(Signal::SIGUSR1, SigHandler::Handler(handle_reboot))
+            .context("failed to install SIGUSR1 handler")?;
     }
 
     let args: Vec<String> = std::env::args().collect();
@@ -87,7 +95,7 @@ fn main() -> Result<()> {
     executor::run(graph, services, ready_rx, &SHUTDOWN, shared).context("executor failed")?;
 
     if std::process::id() == 1 {
-        pid1::supervise_forever();
+        pid1::supervise_forever(REBOOT.load(Ordering::SeqCst));
     }
 
     Ok(())
