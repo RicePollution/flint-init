@@ -43,3 +43,37 @@ teardown() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"unsupported"* ]]
 }
+
+@test "acquire_binary: uses downloaded binaries when curl succeeds" {
+    # Stub curl to produce a fake tarball
+    curl() {
+        mkdir -p "$BATS_TMPDIR/fake-release"
+        echo '#!/bin/sh' > "$BATS_TMPDIR/fake-release/flint-init"
+        echo '#!/bin/sh' > "$BATS_TMPDIR/fake-release/flint-ctl"
+        chmod +x "$BATS_TMPDIR/fake-release/flint-init" \
+                  "$BATS_TMPDIR/fake-release/flint-ctl"
+        tar -czf "$4" -C "$BATS_TMPDIR/fake-release" flint-init flint-ctl
+    }
+    export -f curl
+    ACQUIRE_MODE=download
+    _acquire_tmpdir="$(mktemp -d)"
+    _download_release "$_acquire_tmpdir"
+    [ -x "$_acquire_tmpdir/flint-init" ]
+    [ -x "$_acquire_tmpdir/flint-ctl" ]
+    rm -rf "$_acquire_tmpdir"
+}
+
+@test "acquire_binary: falls back to build when download fails" {
+    curl() { return 1; }
+    export -f curl
+    cargo() {
+        # Real root-owned binaries already exist in target/release; just succeed
+        return 0
+    }
+    export -f cargo
+    ACQUIRE_MODE=auto
+    _acquire_tmpdir="$(mktemp -d)"
+    acquire_binary "$_acquire_tmpdir"
+    [ "$FLINT_BIN" = "$REPO_ROOT/target/release/flint-init" ]
+    rm -rf "$_acquire_tmpdir"
+}
