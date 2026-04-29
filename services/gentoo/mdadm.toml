@@ -1,0 +1,7 @@
+[service]
+name = "mdadm"
+exec = "/sbin/mdadm --assemble --scan"
+restart = "never"
+
+[deps]
+needs = ["udev-trigger"]

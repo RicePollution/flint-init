@@ -1,0 +1,12 @@
+# Void's postfix package installs under /usr/sbin/
+[service]
+name = "postfix"
+exec = "/usr/sbin/postfix start-fg"
+restart = "on-failure"
+
+[deps]
+after = ["nftables"]
+
+[ready]
+strategy = "pidfile"
+path = "/var/spool/postfix/pid/master.pid"

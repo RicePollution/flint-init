@@ -1,0 +1,9 @@
+# Generic client tunnel — copy and adjust --config path for named tunnels
+[service]
+name = "openvpn"
+exec = "/usr/bin/openvpn --config /etc/openvpn/client/client.conf"
+restart = "on-failure"
+
+[deps]
+needs = ["networkmanager"]
+after = ["nftables"]

@@ -1,0 +1,5 @@
+# One-shot: loads /etc/nftables.conf ruleset
+[service]
+name = "nftables"
+exec = "/usr/bin/nft -f /etc/nftables.conf"
+restart = "never"

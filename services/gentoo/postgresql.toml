@@ -1,0 +1,15 @@
+# Gentoo dev-db/postgresql is slot-versioned; adjust path for installed slot (e.g. postgresql-16)
+[service]
+name = "postgresql"
+exec = "/usr/lib/postgresql-16/bin/postgres -D /var/lib/postgresql/16/data"
+restart = "on-failure"
+
+[deps]
+after = ["udev-trigger"]
+
+[ready]
+strategy = "socket"
+path = "/run/postgresql/.s.PGSQL.5432"
+
+[resources]
+oom_score_adj = -500

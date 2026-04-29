@@ -1,0 +1,12 @@
+# Gentoo's www-servers/apache installs apache2 under /usr/sbin/
+[service]
+name = "apache"
+exec = "/usr/sbin/apache2 -D FOREGROUND"
+restart = "on-failure"
+
+[deps]
+after = ["nftables"]
+
+[ready]
+strategy = "pidfile"
+path = "/run/apache2/httpd.pid"

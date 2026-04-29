@@ -1,0 +1,13 @@
+# Gentoo's net-print/cups installs cupsd under /usr/sbin/
+[service]
+name = "cups"
+exec = "/usr/sbin/cupsd -f"
+restart = "never"
+
+[deps]
+needs = ["dbus"]
+after = ["avahi"]
+
+[ready]
+strategy = "socket"
+path = "/run/cups/cups.sock"

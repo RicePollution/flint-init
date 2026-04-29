@@ -1,0 +1,8 @@
+# Alternative to chronyd — net-misc/openntpd
+[service]
+name = "openntpd"
+exec = "/usr/sbin/ntpd -d -s"
+restart = "never"
+
+[deps]
+after = ["networkmanager"]

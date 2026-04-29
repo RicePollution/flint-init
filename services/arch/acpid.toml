@@ -1,0 +1,7 @@
+[service]
+name = "acpid"
+exec = "/usr/bin/acpid --foreground"
+restart = "never"
+
+[deps]
+needs = ["udev-trigger"]

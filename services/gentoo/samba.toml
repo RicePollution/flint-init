@@ -1,0 +1,12 @@
+# Gentoo's net-fs/samba installs smbd under /usr/sbin/
+[service]
+name = "samba"
+exec = "/usr/sbin/smbd --foreground --no-process-group"
+restart = "on-failure"
+
+[deps]
+after = ["udev-trigger", "nftables"]
+
+[ready]
+strategy = "pidfile"
+path = "/run/samba/smbd.pid"

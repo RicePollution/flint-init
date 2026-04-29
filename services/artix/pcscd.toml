@@ -1,0 +1,11 @@
+[service]
+name = "pcscd"
+exec = "/usr/bin/pcscd --foreground"
+restart = "on-failure"
+
+[deps]
+needs = ["udev-trigger"]
+
+[ready]
+strategy = "socket"
+path = "/run/pcscd/pcscd.comm"

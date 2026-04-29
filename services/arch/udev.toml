@@ -1,0 +1,11 @@
+[service]
+name = "udev"
+exec = "/usr/bin/udevd"
+restart = "on-failure"
+
+[ready]
+strategy = "socket"
+path = "/run/udev/control"
+
+[resources]
+oom_score_adj = -1000

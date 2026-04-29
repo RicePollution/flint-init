@@ -1,0 +1,5 @@
+# Gentoo's default logger in many profiles — alternative to syslog-ng
+[service]
+name = "metalog"
+exec = "/usr/sbin/metalog --nodaemon"
+restart = "on-failure"

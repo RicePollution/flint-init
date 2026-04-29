@@ -1,0 +1,8 @@
+# Runs as the syncthing system user; for per-user installs run as a user service instead
+[service]
+name = "syncthing"
+exec = "/usr/bin/syncthing --no-browser --no-restart"
+restart = "on-failure"
+
+[deps]
+needs = ["networkmanager"]

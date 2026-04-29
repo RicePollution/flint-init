@@ -1,0 +1,7 @@
+[service]
+name = "lvm2"
+exec = "/usr/bin/vgchange --activate y"
+restart = "never"
+
+[deps]
+needs = ["udev-trigger"]

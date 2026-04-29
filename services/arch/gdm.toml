@@ -1,0 +1,8 @@
+[service]
+name = "gdm"
+exec = "/usr/bin/gdm"
+restart = "never"
+
+[deps]
+needs = ["dbus", "polkit"]
+after = ["udev-trigger"]

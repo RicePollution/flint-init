@@ -1,0 +1,12 @@
+[service]
+name = "libvirtd"
+exec = "/usr/bin/libvirtd --listen"
+restart = "on-failure"
+
+[deps]
+needs = ["dbus", "polkit"]
+after = ["nftables"]
+
+[ready]
+strategy = "socket"
+path = "/run/libvirt/libvirt-sock"

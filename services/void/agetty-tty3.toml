@@ -1,0 +1,4 @@
+[service]
+name = "agetty-tty3"
+exec = "/sbin/agetty tty3 linux"
+restart = "always"

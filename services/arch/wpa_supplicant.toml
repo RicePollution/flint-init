@@ -1,0 +1,8 @@
+# Use when managing Wi-Fi directly instead of via NetworkManager
+[service]
+name = "wpa_supplicant"
+exec = "/usr/bin/wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf -f /dev/stderr"
+restart = "on-failure"
+
+[deps]
+needs = ["udev-trigger"]

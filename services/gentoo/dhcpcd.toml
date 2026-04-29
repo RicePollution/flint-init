@@ -1,0 +1,8 @@
+[service]
+name = "dhcpcd"
+exec = "/usr/sbin/dhcpcd --nobackground"
+restart = "on-failure"
+
+[deps]
+needs = ["udev-trigger"]
+after = ["nftables"]

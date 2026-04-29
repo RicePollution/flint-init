@@ -1,0 +1,5 @@
+# Gentoo alternative to cronie — sys-process/fcron
+[service]
+name = "fcron"
+exec = "/usr/sbin/fcron --foreground"
+restart = "never"

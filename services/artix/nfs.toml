@@ -1,0 +1,8 @@
+# NFS server — requires kernel NFS support (CONFIG_NFSD) and nfs-utils
+[service]
+name = "nfs"
+exec = "/usr/bin/rpc.nfsd --foreground --no-nfs-version 2 8"
+restart = "never"
+
+[deps]
+after = ["udev-trigger", "nftables"]

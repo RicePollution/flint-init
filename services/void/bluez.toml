@@ -1,0 +1,12 @@
+# Void's bluez package installs bluetoothd under /usr/libexec/bluetooth/
+[service]
+name = "bluez"
+exec = "/usr/libexec/bluetooth/bluetoothd --nodetach"
+restart = "never"
+
+[deps]
+needs = ["dbus", "udev-trigger"]
+
+[ready]
+strategy = "socket"
+path = "/run/bluetooth/bluetooth.sock"

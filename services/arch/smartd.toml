@@ -1,0 +1,7 @@
+[service]
+name = "smartd"
+exec = "/usr/bin/smartd --no-fork"
+restart = "never"
+
+[deps]
+needs = ["udev-trigger"]

@@ -1,0 +1,4 @@
+[service]
+name = "agetty-tty2"
+exec = "/usr/bin/agetty tty2 linux"
+restart = "always"

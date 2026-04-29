@@ -1,0 +1,14 @@
+[service]
+name = "postgresql"
+exec = "/usr/bin/postgres -D /var/lib/postgresql/data"
+restart = "on-failure"
+
+[deps]
+after = ["udev-trigger"]
+
+[ready]
+strategy = "socket"
+path = "/run/postgresql/.s.PGSQL.5432"
+
+[resources]
+oom_score_adj = -500

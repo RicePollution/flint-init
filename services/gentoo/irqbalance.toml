@@ -1,0 +1,4 @@
+[service]
+name = "irqbalance"
+exec = "/usr/sbin/irqbalance --foreground"
+restart = "never"

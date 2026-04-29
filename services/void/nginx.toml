@@ -1,0 +1,11 @@
+[service]
+name = "nginx"
+exec = "/usr/bin/nginx -g 'daemon off;'"
+restart = "on-failure"
+
+[deps]
+after = ["nftables"]
+
+[ready]
+strategy = "pidfile"
+path = "/run/nginx.pid"

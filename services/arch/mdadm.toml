@@ -1,0 +1,8 @@
+# One-shot: assembles all MD RAID arrays defined in /etc/mdadm.conf
+[service]
+name = "mdadm"
+exec = "/usr/bin/mdadm --assemble --scan"
+restart = "never"
+
+[deps]
+needs = ["udev-trigger"]

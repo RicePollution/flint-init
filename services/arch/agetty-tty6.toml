@@ -1,0 +1,4 @@
+[service]
+name = "agetty-tty6"
+exec = "/usr/bin/agetty tty6 linux"
+restart = "always"

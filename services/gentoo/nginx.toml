@@ -1,0 +1,12 @@
+# Gentoo's www-servers/nginx installs under /usr/sbin/
+[service]
+name = "nginx"
+exec = "/usr/sbin/nginx -g 'daemon off;'"
+restart = "on-failure"
+
+[deps]
+after = ["nftables"]
+
+[ready]
+strategy = "pidfile"
+path = "/run/nginx.pid"

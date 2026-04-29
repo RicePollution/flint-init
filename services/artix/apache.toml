@@ -1,0 +1,11 @@
+[service]
+name = "apache"
+exec = "/usr/bin/httpd -D FOREGROUND"
+restart = "on-failure"
+
+[deps]
+after = ["nftables"]
+
+[ready]
+strategy = "pidfile"
+path = "/run/httpd/httpd.pid"

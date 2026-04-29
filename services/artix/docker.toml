@@ -1,0 +1,15 @@
+[service]
+name = "docker"
+exec = "/usr/bin/dockerd"
+restart = "on-failure"
+
+[deps]
+needs = ["containerd"]
+after = ["nftables"]
+
+[ready]
+strategy = "socket"
+path = "/run/docker.sock"
+
+[resources]
+oom_score_adj = -500

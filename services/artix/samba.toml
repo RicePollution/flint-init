@@ -1,0 +1,11 @@
+[service]
+name = "samba"
+exec = "/usr/bin/smbd --foreground --no-process-group"
+restart = "on-failure"
+
+[deps]
+after = ["udev-trigger", "nftables"]
+
+[ready]
+strategy = "pidfile"
+path = "/run/samba/smbd.pid"

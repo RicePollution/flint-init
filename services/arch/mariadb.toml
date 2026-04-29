@@ -1,0 +1,14 @@
+[service]
+name = "mariadb"
+exec = "/usr/bin/mariadbd --user=mysql --datadir=/var/lib/mysql"
+restart = "on-failure"
+
+[deps]
+after = ["udev-trigger"]
+
+[ready]
+strategy = "socket"
+path = "/run/mysqld/mysqld.sock"
+
+[resources]
+oom_score_adj = -500

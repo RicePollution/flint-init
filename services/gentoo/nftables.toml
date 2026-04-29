@@ -1,0 +1,4 @@
+[service]
+name = "nftables"
+exec = "/usr/sbin/nft -f /etc/nftables.conf"
+restart = "never"

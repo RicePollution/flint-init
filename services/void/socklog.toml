@@ -1,0 +1,6 @@
+# Void's preferred logger — reads from /dev/log unix socket
+# Alternative to rsyslog — do not run both
+[service]
+name = "socklog"
+exec = "/usr/bin/socklog unix /dev/log"
+restart = "on-failure"

@@ -1,0 +1,12 @@
+# Gentoo uses sys-fs/eudev; binary path is the same as upstream udev
+[service]
+name = "udev"
+exec = "/usr/bin/udevd"
+restart = "on-failure"
+
+[ready]
+strategy = "socket"
+path = "/run/udev/control"
+
+[resources]
+oom_score_adj = -1000

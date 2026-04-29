@@ -1,0 +1,9 @@
+# Lightweight alternative to NetworkManager — do not run both
+[service]
+name = "dhcpcd"
+exec = "/usr/bin/dhcpcd --nobackground"
+restart = "on-failure"
+
+[deps]
+needs = ["udev-trigger"]
+after = ["nftables"]
