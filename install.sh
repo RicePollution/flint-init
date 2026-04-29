@@ -55,6 +55,25 @@ detect_distro() {
     echo "[flint-install] detected distro: $DISTRO [ok]"
 }
 
+install_files() {
+    echo "[flint-install] installing binaries..."
+    install -D -m 755 "$FLINT_BIN"     "$ROOT/usr/sbin/flint-init"
+    install -D -m 755 "$FLINT_CTL_BIN" "$ROOT/usr/bin/flint-ctl"
+    echo "[flint-install]   $ROOT/usr/sbin/flint-init [ok]"
+    echo "[flint-install]   $ROOT/usr/bin/flint-ctl [ok]"
+
+    local svc_dir="$REPO_ROOT/services/$DISTRO"
+    if [ ! -d "$svc_dir" ]; then
+        echo "[flint-install] error: no service definitions for $DISTRO at $svc_dir" >&2
+        exit 1
+    fi
+
+    echo "[flint-install] installing $DISTRO service definitions..."
+    mkdir -p "$ROOT/etc/flint/services"
+    cp "$svc_dir"/*.toml "$ROOT/etc/flint/services/"
+    echo "[flint-install]   $(ls "$svc_dir"/*.toml | wc -l) services installed [ok]"
+}
+
 _download_release() {
     local tmpdir="$1"
     local arch="x86_64"

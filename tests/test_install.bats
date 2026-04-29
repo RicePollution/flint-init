@@ -77,3 +77,33 @@ teardown() {
     [ "$FLINT_BIN" = "$REPO_ROOT/target/release/flint-init" ]
     rm -rf "$_acquire_tmpdir"
 }
+
+@test "install_files: copies binaries to ROOT" {
+    FLINT_BIN="$(mktemp)"
+    FLINT_CTL_BIN="$(mktemp)"
+    chmod +x "$FLINT_BIN" "$FLINT_CTL_BIN"
+    DISTRO=artix
+    install_files
+    [ -x "$TMPROOT/usr/sbin/flint-init" ]
+    [ -x "$TMPROOT/usr/bin/flint-ctl" ]
+}
+
+@test "install_files: copies distro service TOMLs to ROOT" {
+    FLINT_BIN="$(mktemp)"
+    FLINT_CTL_BIN="$(mktemp)"
+    chmod +x "$FLINT_BIN" "$FLINT_CTL_BIN"
+    DISTRO=artix
+    install_files
+    # At least one artix TOML should be present
+    ls "$TMPROOT/etc/flint/services/"*.toml
+}
+
+@test "install_files: exits 1 for distro with no service directory" {
+    FLINT_BIN="$(mktemp)"
+    FLINT_CTL_BIN="$(mktemp)"
+    chmod +x "$FLINT_BIN" "$FLINT_CTL_BIN"
+    DISTRO=nonexistent
+    run install_files
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no service definitions"* ]]
+}
