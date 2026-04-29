@@ -27,6 +27,34 @@ check_root() {
     fi
 }
 
+detect_distro() {
+    if [ ! -f "$_FLINT_OS_RELEASE" ]; then
+        echo "[flint-install] error: $_FLINT_OS_RELEASE not found" >&2
+        exit 1
+    fi
+    # shellcheck source=/dev/null
+    source "$_FLINT_OS_RELEASE"
+    local id="${ID:-}"
+    local id_like="${ID_LIKE:-}"
+    case "$id" in
+        artix) DISTRO=artix ;;
+        arch)  DISTRO=arch ;;
+        void)  DISTRO=void ;;
+        *)
+            case "$id_like" in
+                *arch*) DISTRO=arch ;;
+                *void*) DISTRO=void ;;
+                *)
+                    echo "[flint-install] error: unsupported distro: ${id:-unknown}" >&2
+                    echo "[flint-install] supported distros: artix, arch, void" >&2
+                    exit 1
+                    ;;
+            esac
+            ;;
+    esac
+    echo "[flint-install] detected distro: $DISTRO [ok]"
+}
+
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi
