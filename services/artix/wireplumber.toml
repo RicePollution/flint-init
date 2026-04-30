@@ -1,7 +1,0 @@
-[service]
-name = "wireplumber"
-exec = "/usr/bin/wireplumber"
-restart = "never"
-
-[deps]
-needs = ["pipewire"]

@@ -1,8 +1,0 @@
-# One-shot: replays coldplug events so all existing devices get uevents
-[service]
-name = "udev-trigger"
-exec = "/usr/bin/udevadm trigger --action=add --type=subsystems"
-restart = "never"
-
-[deps]
-needs = ["udev"]

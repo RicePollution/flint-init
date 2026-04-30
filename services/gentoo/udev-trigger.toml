@@ -1,7 +1,0 @@
-[service]
-name = "udev-trigger"
-exec = "/usr/bin/udevadm trigger --action=add --type=subsystems"
-restart = "never"
-
-[deps]
-needs = ["udev"]

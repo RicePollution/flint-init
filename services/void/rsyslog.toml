@@ -1,8 +1,0 @@
-[service]
-name = "rsyslog"
-exec = "/usr/bin/rsyslogd -n"
-restart = "on-failure"
-
-[ready]
-strategy = "pidfile"
-path = "/run/rsyslogd.pid"

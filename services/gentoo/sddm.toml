@@ -1,8 +1,0 @@
-[service]
-name = "sddm"
-exec = "/usr/bin/sddm"
-restart = "never"
-
-[deps]
-needs = ["dbus", "polkit"]
-after = ["udev-trigger"]

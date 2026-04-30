@@ -1,8 +1,0 @@
-# One-shot: replays uevents so drivers bind to already-present hardware
-[service]
-name = "udev-trigger"
-exec = "/usr/bin/udevadm trigger --action=add --type=subsystems"
-restart = "never"
-
-[deps]
-needs = ["udev"]

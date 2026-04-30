@@ -1,7 +1,0 @@
-[service]
-name = "fail2ban"
-exec = "/usr/bin/fail2ban-server --foreground"
-restart = "on-failure"
-
-[deps]
-after = ["sshd", "nftables"]

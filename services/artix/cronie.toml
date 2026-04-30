@@ -1,4 +1,0 @@
-[service]
-name = "cronie"
-exec = "/usr/bin/crond -n -s"
-restart = "never"

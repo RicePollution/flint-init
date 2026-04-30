@@ -65,11 +65,22 @@ pub fn fetch_catalog() -> anyhow::Result<Catalog> {
 }
 
 pub fn fetch_service_toml(distro: &str, name: &str) -> anyhow::Result<String> {
-    let url = format!(
+    let distro_url = format!(
         "https://raw.githubusercontent.com/RicePollution/flint-init/main/services/{}/{}.toml",
         distro, name
     );
-    let content = ureq::get(&url)
+    let resp = ureq::get(&distro_url).call();
+    match resp {
+        Ok(r) => return Ok(r.into_string()?),
+        Err(ureq::Error::Status(404, _)) => {}
+        Err(e) => return Err(anyhow::anyhow!("failed to fetch service \"{}\": {}", name, e)),
+    }
+
+    let global_url = format!(
+        "https://raw.githubusercontent.com/RicePollution/flint-init/main/services/global/{}.toml",
+        name
+    );
+    let content = ureq::get(&global_url)
         .call()
         .map_err(|e| anyhow::anyhow!("failed to fetch service \"{}\": {}", name, e))?
         .into_string()?;

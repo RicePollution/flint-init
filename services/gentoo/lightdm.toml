@@ -1,8 +1,0 @@
-[service]
-name = "lightdm"
-exec = "/usr/bin/lightdm"
-restart = "never"
-
-[deps]
-needs = ["dbus", "polkit"]
-after = ["udev-trigger"]

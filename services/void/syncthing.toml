@@ -1,7 +1,0 @@
-[service]
-name = "syncthing"
-exec = "/usr/bin/syncthing --no-browser --no-restart"
-restart = "on-failure"
-
-[deps]
-needs = ["networkmanager"]

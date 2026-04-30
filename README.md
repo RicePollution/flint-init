@@ -181,8 +181,22 @@ installed: /etc/flint/services/udev.toml
 
 The catalog index (`catalog.toml`) lives at the repo root and lists all available
 services with optional per-distro filtering. Fetched definitions are cached in
-`/var/cache/flint/catalog.toml` (TTL: 24 hours). New services can be contributed by
-adding a TOML file under `services/<distro>/`.
+`/var/cache/flint/catalog.toml` (TTL: 24 hours).
+
+Service definitions live under `services/`:
+
+| Directory | Contents |
+|-----------|----------|
+| `services/global/` | Definitions that work on any distro (same binary paths everywhere) |
+| `services/arch/` | Arch-specific overrides |
+| `services/artix/` | Artix-specific overrides |
+| `services/void/` | Void-specific overrides |
+| `services/gentoo/` | Gentoo-specific overrides |
+
+`flint-ctl get` tries `services/<distro>/<name>.toml` first and falls back to
+`services/global/<name>.toml` if no distro-specific file exists. To contribute a new
+service, add it to `services/global/` if the binary paths are the same across distros,
+or to the appropriate distro directory if they differ.
 
 If a service isn't in the catalog, `flint-ctl scaffold` generates a starter TOML from
 the binary found in `$PATH`:
