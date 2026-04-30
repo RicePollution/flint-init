@@ -173,7 +173,20 @@ pub fn run_with_marker(
                             if std::time::Instant::now() >= deadline {
                                 eprintln!("[flint] shutdown: SIGKILL {}", name);
                                 let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
-                                let _ = waitpid(pid, None);
+                                // After SIGKILL: poll briefly then move on (D-state processes may not reap immediately).
+                                let kill_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+                                loop {
+                                    match waitpid(pid, Some(WaitPidFlag::WNOHANG)) {
+                                        Ok(WaitStatus::StillAlive) => {
+                                            if std::time::Instant::now() >= kill_deadline {
+                                                eprintln!("[flint] shutdown: {} did not exit after SIGKILL, continuing", name);
+                                                break;
+                                            }
+                                            std::thread::sleep(std::time::Duration::from_millis(50));
+                                        }
+                                        _ => break,
+                                    }
+                                }
                                 break;
                             }
                             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -185,8 +198,22 @@ pub fn run_with_marker(
             }
 
             // Kill any remaining PIDs not covered by shutdown_order (edge case).
-            for pid in pid_to_name.keys() {
+            for (pid, name) in &pid_to_name {
+                eprintln!("[flint] shutdown: stopping straggler {}", name);
                 let _ = nix::sys::signal::kill(*pid, nix::sys::signal::Signal::SIGTERM);
+                let straggler_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                loop {
+                    match waitpid(*pid, Some(WaitPidFlag::WNOHANG)) {
+                        Ok(WaitStatus::StillAlive) => {
+                            if std::time::Instant::now() >= straggler_deadline {
+                                let _ = nix::sys::signal::kill(*pid, nix::sys::signal::Signal::SIGKILL);
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                        _ => break,
+                    }
+                }
             }
             break;
         }
