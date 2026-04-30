@@ -175,6 +175,13 @@ pub fn run(
             }
             if let Some(def) = svc_by_name.get(&name) {
                 eprintln!("[flint] starting: {}", name);
+                // Delete any stale readiness file from a previous run so the
+                // inotify watcher is never triggered by a leftover file.
+                if let Some(ready) = &def.ready {
+                    if let Some(path) = &ready.path {
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
                 let pid = spawn_service(def)?;
                 service_states.insert(name.clone(), ServiceState::Running(pid));
                 sync_state(&shared, &name, &ServiceState::Running(pid));
@@ -527,6 +534,63 @@ mod tests {
         let svc = make_service_with_restart("always-fail", "/usr/bin/false", &[], RestartPolicy::Always);
         let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
         assert!(run_no_ready(graph, vec![svc]).is_ok());
+    }
+
+    #[test]
+    fn stale_pidfile_does_not_cause_false_ready() {
+        // Create a stale pidfile before the service starts.
+        // The executor must delete it before forking so ready is not
+        // signalled from the stale file.
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("stale.pid");
+
+        // Write a stale file as if a previous run left it behind.
+        std::fs::write(&pidfile, "99999").unwrap();
+
+        // Build a service whose ready strategy watches this pidfile.
+        // The exec just sleeps briefly then writes the real pidfile.
+        let script = dir.path().join("svc.sh");
+        let pidfile_path = pidfile.display().to_string();
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\nsleep 0.05\necho $$ > {}\n", pidfile_path),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let exec = format!("/bin/sh {}", script.display());
+        let mut svc = make_service_with_needs("stale_svc", &[], &[], &exec);
+        svc.ready = Some(flint_init::service::ReadySection {
+            strategy: flint_init::service::ReadyStrategy::Pidfile,
+            path: Some(pidfile.to_str().unwrap().to_string()),
+        });
+
+        let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
+        let (ready_tx, ready_rx) = mpsc::channel();
+
+        // Start the watcher in a thread so it fires when the real pidfile appears.
+        let pidfile_clone = pidfile.clone();
+        let tx_clone = ready_tx.clone();
+        std::thread::spawn(move || {
+            crate::ready::watch_pidfile(&pidfile_clone, tx_clone, "stale_svc".to_string());
+        });
+        drop(ready_tx);
+
+        static NO_SHUTDOWN_STALE: AtomicBool = AtomicBool::new(false);
+        let result = run(
+            graph,
+            vec![svc],
+            ready_rx,
+            &NO_SHUTDOWN_STALE,
+            crate::ctl_proto::new_shared_state(),
+        );
+        assert!(result.is_ok());
+
+        // The pidfile must now contain the real child PID, not the stale 99999.
+        let content = std::fs::read_to_string(&pidfile).unwrap_or_default();
+        let pid: u32 = content.trim().parse().expect("pidfile should contain a number");
+        assert_ne!(pid, 99999, "stale pidfile was not overwritten by the real service");
     }
 
     #[test]
