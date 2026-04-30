@@ -14,7 +14,43 @@ fn usage() -> ! {
     eprintln!("  stop <service>       Send SIGTERM to a running service");
     eprintln!("  get --list           List services available in the catalog");
     eprintln!("  get <service>        Fetch and install a service from the catalog");
+    eprintln!("  scaffold <service>   Print a starter TOML for a service not in the catalog");
     process::exit(1);
+}
+
+fn find_in_path(name: &str) -> Option<String> {
+    let path_var = std::env::var("PATH").unwrap_or_default();
+    for dir in path_var.split(':') {
+        let candidate = std::path::Path::new(dir).join(name);
+        if let Ok(meta) = std::fs::metadata(&candidate) {
+            use std::os::unix::fs::PermissionsExt;
+            if meta.is_file() && meta.permissions().mode() & 0o111 != 0 {
+                return Some(candidate.to_string_lossy().into_owned());
+            }
+        }
+    }
+    None
+}
+
+fn cmd_scaffold(name: &str) {
+    let exec = find_in_path(name).unwrap_or_else(|| {
+        eprintln!("flint-ctl: warning: \"{}\" not found in $PATH — fill in exec manually", name);
+        format!("/usr/bin/{}", name)
+    });
+    print!(
+        r#"[service]
+name = "{name}"
+exec = "{exec}"   # verify foreground/nodaemon flags
+restart = "on-failure"
+
+# [deps]
+# needs = ["dbus"]
+
+# [ready]
+# strategy = "pidfile"
+# path = "/run/{name}/{name}.pid"
+"#
+    );
 }
 
 const SERVICES_DIR: &str = "/etc/flint/services";
@@ -126,6 +162,10 @@ fn main() {
     if let [cmd, name] = args.as_slice() {
         if cmd == "get" {
             cmd_get(name);
+            return;
+        }
+        if cmd == "scaffold" {
+            cmd_scaffold(name);
             return;
         }
     }
