@@ -1,0 +1,12 @@
+[service]
+name = "hyprland"
+exec = "/usr/bin/hyprland"
+restart = "never"
+
+[deps]
+needs = ["dbus", "polkit"]
+after = ["udev-trigger", "pipewire"]
+
+[ready]
+strategy = "socket"
+path = "/run/user/1000/hypr"

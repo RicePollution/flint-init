@@ -1,0 +1,7 @@
+[service]
+name = "xdg-desktop-portal-hyprland"
+exec = "/usr/lib/xdg-desktop-portal-hyprland"
+restart = "on-failure"
+
+[deps]
+needs = ["dbus", "hyprland"]

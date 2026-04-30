@@ -1,0 +1,8 @@
+[service]
+name = "waybar"
+exec = "/usr/bin/waybar"
+restart = "on-failure"
+
+[deps]
+needs = ["hyprland"]
+after = ["dbus"]

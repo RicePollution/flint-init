@@ -1,0 +1,12 @@
+[service]
+name = "dunst"
+exec = "/usr/bin/dunst"
+restart = "on-failure"
+
+[deps]
+needs = ["dbus"]
+after = ["hyprland"]
+
+[ready]
+strategy = "socket"
+path = "/run/user/1000/dunst/dunst.sock"

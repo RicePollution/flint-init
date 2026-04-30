@@ -1,0 +1,11 @@
+[service]
+name = "swww"
+exec = "/usr/bin/swww-daemon"
+restart = "on-failure"
+
+[deps]
+needs = ["hyprland"]
+
+[ready]
+strategy = "socket"
+path = "/run/user/1000/swww/swww.socket"

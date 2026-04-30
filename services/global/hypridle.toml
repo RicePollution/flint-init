@@ -1,0 +1,7 @@
+[service]
+name = "hypridle"
+exec = "/usr/bin/hypridle"
+restart = "on-failure"
+
+[deps]
+needs = ["hyprland"]
