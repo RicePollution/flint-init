@@ -30,6 +30,50 @@ pub fn detect_distro_from(path: &str) -> String {
     "artix".to_string()
 }
 
+const CATALOG_URL: &str =
+    "https://raw.githubusercontent.com/RicePollution/flint-init/main/catalog.toml";
+const CACHE_PATH: &str = "/var/cache/flint/catalog.toml";
+const CACHE_TTL_SECS: u64 = 86400;
+
+pub fn fetch_catalog() -> anyhow::Result<Catalog> {
+    use std::time::Duration;
+
+    let cache = std::path::Path::new(CACHE_PATH);
+
+    if let Ok(meta) = cache.metadata() {
+        if let Ok(modified) = meta.modified() {
+            if modified.elapsed().unwrap_or(Duration::MAX) < Duration::from_secs(CACHE_TTL_SECS) {
+                let content = std::fs::read_to_string(cache)?;
+                return Ok(toml::from_str(&content)?);
+            }
+        }
+    }
+
+    let content = ureq::get(CATALOG_URL)
+        .call()
+        .map_err(|e| anyhow::anyhow!("failed to fetch catalog: {}", e))?
+        .into_string()?;
+
+    if let Some(parent) = cache.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(cache, &content)?;
+
+    Ok(toml::from_str(&content)?)
+}
+
+pub fn fetch_service_toml(distro: &str, name: &str) -> anyhow::Result<String> {
+    let url = format!(
+        "https://raw.githubusercontent.com/RicePollution/flint-init/main/services/{}/{}.toml",
+        distro, name
+    );
+    let content = ureq::get(&url)
+        .call()
+        .map_err(|e| anyhow::anyhow!("failed to fetch service \"{}\": {}", name, e))?
+        .into_string()?;
+    Ok(content)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
