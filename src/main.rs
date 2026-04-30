@@ -74,6 +74,11 @@ fn main() -> Result<()> {
     for svc in &services {
         if let Some(r) = &svc.ready {
             if let Some(path) = &r.path {
+                // Delete any stale readiness file before spawning the watcher.
+                // If the file exists from a previous run, the watcher's fast-path
+                // would fire immediately and falsely signal the service as ready.
+                let _ = std::fs::remove_file(path);
+
                 let p = Path::new(path);
                 if let Some(parent) = p.parent() {
                     std::fs::create_dir_all(parent)
