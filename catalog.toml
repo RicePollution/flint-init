@@ -1,0 +1,149 @@
+[acpid]
+description = "ACPI event daemon"
+
+[apache]
+description = "Apache HTTP server"
+distros = ["artix"]
+
+[avahi]
+description = "mDNS/DNS-SD daemon"
+
+[bluez]
+description = "Bluetooth protocol stack"
+
+[chronyd]
+description = "NTP time synchronisation"
+
+[containerd]
+description = "Container runtime"
+
+[cronie]
+description = "Cron daemon"
+
+[cups]
+description = "Printing system"
+
+[dbus]
+description = "D-Bus system message bus"
+
+[dhcpcd]
+description = "DHCP client daemon"
+
+[docker]
+description = "Docker container engine"
+
+[fail2ban]
+description = "Intrusion prevention via log analysis"
+
+[gdm]
+description = "GNOME display manager"
+
+[hwclock]
+description = "Hardware clock sync"
+distros = ["artix"]
+
+[irqbalance]
+description = "Distribute hardware interrupts across CPUs"
+
+[kmod]
+description = "Kernel module loader"
+distros = ["artix"]
+
+[libvirtd]
+description = "Virtualisation daemon"
+
+[lightdm]
+description = "Lightweight display manager"
+
+[lvm2]
+description = "LVM2 volume management"
+distros = ["artix"]
+
+[mariadb]
+description = "MariaDB database server"
+
+[mdadm]
+description = "MD software RAID management"
+distros = ["artix"]
+
+[networkmanager]
+description = "Network connection manager"
+
+[nfs]
+description = "NFS server"
+distros = ["artix"]
+
+[nftables]
+description = "Netfilter packet filtering"
+
+[nginx]
+description = "Nginx web server"
+
+[openvpn]
+description = "OpenVPN client/server"
+distros = ["artix"]
+
+[pcscd]
+description = "PC/SC smart card daemon"
+distros = ["artix"]
+
+[pipewire]
+description = "PipeWire audio/video server"
+
+[polkit]
+description = "PolicyKit authorisation"
+
+[postfix]
+description = "Postfix mail transfer agent"
+distros = ["artix"]
+
+[postgresql]
+description = "PostgreSQL database server"
+
+[redis]
+description = "Redis in-memory data store"
+
+[rsyslog]
+description = "Rocket-fast system logger"
+distros = ["artix"]
+
+[samba]
+description = "SMB/CIFS file sharing"
+distros = ["artix"]
+
+[sddm]
+description = "Simple Desktop Display Manager"
+
+[smartd]
+description = "SMART disk monitoring"
+
+[sshd]
+description = "OpenSSH daemon"
+
+[syncthing]
+description = "Continuous file synchronisation"
+distros = ["artix"]
+
+[sysctl]
+description = "Apply kernel parameters at boot"
+distros = ["artix"]
+
+[syslog-ng]
+description = "syslog-ng logging daemon"
+distros = ["artix"]
+
+[tor]
+description = "Tor anonymity network"
+distros = ["artix"]
+
+[udev]
+description = "Kernel device manager"
+
+[udev-trigger]
+description = "Trigger udev to process existing devices"
+
+[wireplumber]
+description = "PipeWire session and policy manager"
+
+[wpa_supplicant]
+description = "WPA/WPA2 supplicant"

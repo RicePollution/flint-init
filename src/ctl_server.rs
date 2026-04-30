@@ -98,3 +98,128 @@ fn handle_connection(stream: std::os::unix::net::UnixStream, shared: SharedState
         break;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ctl_proto::{new_shared_state, ServiceInfo};
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+
+    fn start_server_on(sock_path: &std::path::Path, shared: SharedState) {
+        let sock_path = sock_path.to_path_buf();
+        std::thread::spawn(move || {
+            let _ = std::fs::remove_file(&sock_path);
+            let listener = UnixListener::bind(&sock_path).unwrap();
+            for stream in listener.incoming() {
+                match stream {
+                    Ok(s) => {
+                        let shared = shared.clone();
+                        std::thread::spawn(move || handle_connection(s, shared));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        // Give the thread a moment to bind.
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    fn send_request(sock_path: &std::path::Path, req: &str) -> String {
+        let mut stream = UnixStream::connect(sock_path).unwrap();
+        let mut payload = req.to_string();
+        payload.push('\n');
+        stream.write_all(payload.as_bytes()).unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        line.trim_end().to_string()
+    }
+
+    #[test]
+    fn status_returns_empty_when_no_services() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("ctl.sock");
+        let shared = new_shared_state();
+        start_server_on(&sock, shared);
+
+        let resp = send_request(&sock, r#"{"cmd":"status"}"#);
+        let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v, serde_json::json!({"services": []}));
+    }
+
+    #[test]
+    fn status_returns_registered_services() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("ctl.sock");
+        let shared = new_shared_state();
+        shared.lock().unwrap().insert(
+            "sshd".to_string(),
+            ServiceInfo { name: "sshd".to_string(), state: "ready".to_string(), pid: Some(42) },
+        );
+        start_server_on(&sock, shared);
+
+        let resp = send_request(&sock, r#"{"cmd":"status"}"#);
+        let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        let services = v["services"].as_array().unwrap();
+        assert_eq!(services.len(), 1);
+        assert_eq!(services[0]["name"], "sshd");
+        assert_eq!(services[0]["state"], "ready");
+        assert_eq!(services[0]["pid"], 42);
+    }
+
+    #[test]
+    fn stop_unknown_service_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("ctl.sock");
+        let shared = new_shared_state();
+        start_server_on(&sock, shared);
+
+        let resp = send_request(&sock, r#"{"cmd":"stop","service":"ghost"}"#);
+        let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert!(v["error"].as_str().unwrap().contains("ghost"));
+    }
+
+    #[test]
+    fn stop_service_with_no_pid_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("ctl.sock");
+        let shared = new_shared_state();
+        shared.lock().unwrap().insert(
+            "pending-svc".to_string(),
+            ServiceInfo { name: "pending-svc".to_string(), state: "pending".to_string(), pid: None },
+        );
+        start_server_on(&sock, shared);
+
+        let resp = send_request(&sock, r#"{"cmd":"stop","service":"pending-svc"}"#);
+        let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert!(v["error"].is_string());
+    }
+
+    #[test]
+    fn invalid_json_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("ctl.sock");
+        let shared = new_shared_state();
+        start_server_on(&sock, shared);
+
+        let resp = send_request(&sock, "not json at all");
+        let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert!(v["error"].as_str().unwrap().contains("invalid request"));
+    }
+
+    #[test]
+    fn multiple_sequential_connections_are_each_handled() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("ctl.sock");
+        let shared = new_shared_state();
+        start_server_on(&sock, shared);
+
+        for _ in 0..3 {
+            let resp = send_request(&sock, r#"{"cmd":"status"}"#);
+            let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
+            assert!(v["services"].is_array());
+        }
+    }
+}

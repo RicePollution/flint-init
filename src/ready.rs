@@ -94,7 +94,7 @@ fn maybe_probe(path: &Path, service_name: &str, probe: bool) {
         eprintln!("[ready] {} socket accepting connections: {:?}", service_name, path);
     } else {
         eprintln!(
-            "[ready] warning: {} socket file exists but connection timed out ({:?}), signalling ready anyway",
+            "[ready] warning: {} socket file exists but connection refused ({:?}), signalling ready anyway",
             service_name, path
         );
     }
