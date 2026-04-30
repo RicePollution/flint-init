@@ -11,9 +11,8 @@ Licensed under the [GNU General Public License v2.0](LICENSE).
 ## The Problem with Wave-Based Init
 
 OpenRC and similar systems divide services into runlevels or waves. Every service in a
-wave must finish before the next wave begins. This means a fast service (dbus, 80ms)
-sits idle waiting for the slowest service in its wave to complete before any of its
-dependents can start.
+wave must finish before the next wave begins. A fast service (dbus, 80ms) sits idle
+waiting for the slowest service in its wave before any of its dependents can start.
 
 ```
 OpenRC wave model:
@@ -76,8 +75,8 @@ instant the file appears. Zero polling. Zero sleep loops.
 
 Two readiness strategies:
 - `pidfile`: ready when the pidfile is created
-- `socket`: ready when the socket file appears **and** a single `UnixStream::connect`
-  probe succeeds. Fail-open: if the probe fails, flint-init logs a warning and signals
+- `socket`: ready when the socket file appears **and** a `UnixStream::connect` probe
+  succeeds. Fail-open: if the probe times out, flint-init logs a warning and signals
   ready anyway so dependents are not blocked indefinitely.
 
 When a service signals ready, its dependents' in-degree counters are decremented. Any
@@ -127,9 +126,7 @@ time, not at boot time.
 startup overhead — config parsing contributes zero.
 
 `flint-watch` is itself a supervised service (`restart = "always"`, no dependencies)
-so it is running before any other service sees a config change. The feature is
-self-contained in `src/cache.rs` and `src/bin/flint_watch.rs` and can be removed with
-a three-line revert if needed.
+so it is running before any other service sees a config change.
 
 ### 7. flint-ctl
 
@@ -151,16 +148,52 @@ $ flint-ctl stop networkmanager
 { "ok": true }
 ```
 
+### 8. Service Catalog
+
+`flint-ctl get` fetches pre-built service definitions from the catalog hosted in this
+repository, with interactive dependency resolution.
+
+```
+# List services available for your distro:
+$ flint-ctl get --list
+acpid                    ACPI event daemon
+avahi                    mDNS/DNS-SD daemon
+bluez                    Bluetooth protocol stack
+dbus                     D-Bus system message bus
+docker                   Docker container engine
+networkmanager           Network connection manager
+nginx                    Nginx web server
+postgresql               PostgreSQL database server
+sshd                     OpenSSH daemon
+...
+
+# Fetch and install a service (prompts for missing dependencies):
+$ flint-ctl get sshd
+installed: /etc/flint/services/sshd.toml
+
+$ flint-ctl get networkmanager
+installed: /etc/flint/services/networkmanager.toml
+networkmanager requires dbus — fetch it too? [y/N] y
+installed: /etc/flint/services/dbus.toml
+networkmanager requires udev — fetch it too? [y/N] y
+installed: /etc/flint/services/udev.toml
+```
+
+The catalog index (`catalog.toml`) lives at the repo root and lists all available
+services with optional per-distro filtering. Fetched definitions are cached in
+`/var/cache/flint/catalog.toml` (TTL: 24 hours). New services can be contributed by
+adding a TOML file under `services/<distro>/`.
+
 ---
 
 ## Boot Time Comparison
 
-flint-init is measured on an Artix Linux QEMU disk image (i7-12700K, KVM, host kernel
+Measured on an Artix Linux QEMU disk image (i7-12700K, KVM, kernel
 `6.19.11-artix1-1`, virtio disk, 512 MB RAM, 2 vCPUs, serial console), averaged over 5
-runs via `scripts/measure-flint-installed.sh`. Reference times for OpenRC and systemd
-are from published benchmarks on real desktop hardware with comparable service sets.
+runs via `scripts/measure-flint-installed.sh`. OpenRC and systemd reference times are
+from published benchmarks on real desktop hardware with comparable service sets.
 
-The **userspace time** column measures from PID 1 exec to login prompt on the serial console.
+The **userspace time** column measures from PID 1 exec to login prompt.
 
 | System | Userspace (PID 1 → login) |
 |--------|---------------------------|
@@ -168,18 +201,17 @@ The **userspace time** column measures from PID 1 exec to login prompt on the se
 | systemd 257 (~40 services) | **~15,000 ms** |
 | **flint-init** (Artix, 32 services) | **759 ms** |
 
-**flint-init reaches a login prompt ~25× faster than OpenRC and ~20× faster than
-systemd.** flint-init's 759 ms includes all 32 services beginning to start; agetty has
-no dependencies in the service graph so the login prompt appears immediately while
-everything else initialises in the background.
+**~25× faster than OpenRC and ~20× faster than systemd.** flint-init's 759 ms includes
+all 32 services beginning to start; agetty carries no dependencies so the login prompt
+appears immediately while everything else initialises in the background.
 
 OpenRC and systemd both gate the login prompt behind service startup completion.
-flint-init avoids this entirely — agetty carries no dependencies so it starts at t=0.
+flint-init avoids this entirely — agetty starts at t=0.
 
 ### What OpenRC is doing for those ~19 seconds
 
 With `rc_parallel="YES"`, independent services in the same runlevel start concurrently.
-Even so, the runlevel itself is a gate — the login prompt cannot appear until the entire
+Even so, the runlevel is a gate — the login prompt cannot appear until the entire
 default runlevel finishes:
 
 ```
@@ -197,9 +229,6 @@ default runlevel finishes:
 ```
 
 ### What systemd is doing for those ~15 seconds
-
-Systemd runs services in parallel where it can, but mandatory targets still sequence
-startup into ordered stages:
 
 ```
 [systemd[1] exec — t=0 relative]
@@ -235,9 +264,8 @@ startup into ordered stages:
 ```
 
 The login prompt is not held hostage by modules, clocks, or filesystems. agetty has no
-dependencies in the service graph, so it starts at t=0 and the user sees a prompt in
-under a second while everything else initialises in the background. The binary cache
-(services.bin) eliminates TOML parsing at boot entirely on warm starts.
+dependencies in the service graph so it starts at t=0 and the user sees a prompt in
+under a second while everything else initialises in the background.
 
 > **flint-init measurement:** QEMU launched with `date +%s%N`, serial output captured to a
 > file, polled until the login prompt appeared on ttyS0. Script: `scripts/measure-flint-installed.sh`.
@@ -247,7 +275,7 @@ under a second while everything else initialises in the background. The binary c
 
 ---
 
-## Real Boot — v0.4.17
+## Real Boot
 
 flint-init booted a real Artix Linux QEMU disk image as PID 1, replacing OpenRC,
 managing 32 services from `/etc/flint/services/` (warm binary cache):
@@ -294,24 +322,21 @@ Server listening on 0.0.0.0 port 22.
 The login prompt appears before udev has even finished initialising. 14 services start
 at t=0 (no unsatisfied dependencies): udev, syslog-ng, sysctl, hwclock, flint-watch,
 dbus, and all seven agetty instances. sshd, NetworkManager, polkit, and others unblock
-the instant dbus signals ready — they don't wait for each other or for udev.
-
-Optional services (pipewire, bluez, cups, avahi, chronyd, smartd, wpa_supplicant,
-wireplumber) are configured `restart = "never"` so a missing binary on a minimal VM
-fails quietly without respawn attempts.
+the instant dbus signals ready.
 
 ---
 
 ## Stage History
 
-| Stage | Description | Version | Status |
-|-------|-------------|---------|--------|
-| 1 | DAG executor, inotify readiness, parallel service spawning, 41 tests | v0.1.x | Complete |
-| 2 | PID 1 handoff, real service definitions, QEMU initramfs boot | v0.2.x | Complete |
-| 3 | Service restart logic, socket connection probing, flint-ctl | v0.3.x | Complete |
-| 4 | fstab mounts, graceful unmount, real Artix disk image boot | v0.4.x | Complete |
-| 5 | Binary config cache, flint-watch inotify daemon, 4.9× faster warm boot | v0.4.17 | Complete |
-| 6 | `install.sh` — single-command installer, GitHub release, bats test suite | v0.5.x | Complete |
+| Stage | Description | Status |
+|-------|-------------|--------|
+| 1 | DAG executor, inotify readiness, parallel service spawning, unit tests | Complete |
+| 2 | PID 1 handoff, real service definitions, QEMU initramfs boot | Complete |
+| 3 | Service restart logic, socket connection probing, flint-ctl | Complete |
+| 4 | fstab mounts, graceful unmount, real Artix disk image boot | Complete |
+| 5 | Binary config cache, flint-watch inotify daemon, 4.9× faster warm boot | Complete |
+| 6 | `install.sh` single-command installer, GitHub release, bats test suite | Complete |
+| 7 | Service catalog — `flint-ctl get` with interactive dep resolution | Complete |
 
 ---
 
@@ -319,16 +344,10 @@ fails quietly without respawn attempts.
 
 ```bash
 cargo build --release
-cargo test
+cargo test          # 58 unit + integration tests, no root required
 ```
 
 Requirements: Rust 1.75+, Linux (uses inotify, fork/exec, nix syscalls).
-
-## Running the Test Suite
-
-```bash
-cargo test   # 50 unit + integration tests, no root required
-```
 
 ## Installing
 
@@ -345,7 +364,7 @@ Then add `init=/usr/sbin/flint-init` to your kernel parameters and reboot.
 ## QEMU Tests
 
 ```bash
-# Full Artix disk image — 32 services, flint-init as PID 1 (primary test):
+# Full Artix disk image — 32 services, flint-init as PID 1:
 sudo bash scripts/create-artix-vm.sh        # one-time setup, ~5 min
 sudo bash scripts/install-flint-into-vm.sh  # install/update binaries
 bash scripts/boot-artix-vm.sh               # boots and tails serial log
@@ -354,11 +373,8 @@ bash scripts/boot-artix-vm.sh               # boots and tails serial log
 bash scripts/measure-flint-installed.sh artix-openrc.qcow2
 sudo bash scripts/measure-openrc-installed.sh artix-openrc.qcow2
 
-# Initramfs boot — udev, dbus, NetworkManager (lighter, no disk image):
+# Initramfs boot — udev, dbus, NetworkManager (no disk image required):
 bash scripts/qemu-test.sh
-
-# Stage 3 integration — restart logic + flint-ctl:
-bash scripts/qemu-stage3-test.sh
 ```
 
 ## Service Definition Reference
