@@ -1,7 +1,22 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{self, Receiver, SyncSender, Sender};
 
 use serde::{Deserialize, Serialize};
+
+pub type ReplySender = SyncSender<Result<(), String>>;
+pub type CommandSender = Sender<CtlCommand>;
+pub type CommandReceiver = Receiver<CtlCommand>;
+
+pub enum CtlCommand {
+    Start   { service: String, reply: ReplySender },
+    Restart { service: String, reply: ReplySender },
+    Reload  { service: String, reply: ReplySender },
+}
+
+pub fn new_command_channel() -> (CommandSender, CommandReceiver) {
+    mpsc::channel()
+}
 
 /// Per-service status as seen by the control socket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,7 +38,10 @@ pub fn new_shared_state() -> SharedState {
 #[serde(tag = "cmd", rename_all = "lowercase")]
 pub enum Request {
     Status,
-    Stop { service: String },
+    Stop    { service: String },
+    Start   { service: String },
+    Restart { service: String },
+    Reload  { service: String },
 }
 
 /// Responses sent from flint-init back to flint-ctl.

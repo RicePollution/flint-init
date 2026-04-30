@@ -83,6 +83,11 @@ fn handle_connection(stream: std::os::unix::net::UnixStream, shared: SharedState
                     },
                 }
             }
+            Ok(Request::Start { service: _ })
+            | Ok(Request::Restart { service: _ })
+            | Ok(Request::Reload { service: _ }) => Response::Error {
+                error: "not yet implemented".to_string(),
+            },
             Err(e) => Response::Error {
                 error: format!("invalid request: {}", e),
             },
