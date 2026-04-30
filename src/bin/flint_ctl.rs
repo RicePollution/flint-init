@@ -3,19 +3,48 @@ use std::os::unix::net::UnixStream;
 use std::process;
 
 use serde_json::json;
+use flint_init::catalog;
 
 const CTL_SOCKET_PATH: &str = "/run/flint/ctl.sock";
 
 fn usage() -> ! {
     eprintln!("Usage: flint-ctl <command> [args]");
     eprintln!("Commands:");
-    eprintln!("  status           List all service states");
-    eprintln!("  stop <service>   Send SIGTERM to a running service");
+    eprintln!("  status               List all service states");
+    eprintln!("  stop <service>       Send SIGTERM to a running service");
+    eprintln!("  get --list           List services available in the catalog");
+    eprintln!("  get <service>        Fetch and install a service from the catalog");
     process::exit(1);
+}
+
+fn cmd_get_list() {
+    let distro = catalog::detect_distro();
+    let cat = catalog::fetch_catalog().unwrap_or_else(|e| {
+        eprintln!("flint-ctl: {}", e);
+        process::exit(1);
+    });
+    let mut names: Vec<&String> = cat
+        .keys()
+        .filter(|name| match &cat[*name].distros {
+            None => true,
+            Some(distros) => distros.iter().any(|d| d == &distro),
+        })
+        .collect();
+    names.sort();
+    for name in names {
+        println!("{:<24} {}", name, cat[name].description);
+    }
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    if let [cmd, flag] = args.as_slice() {
+        if cmd == "get" && flag == "--list" {
+            cmd_get_list();
+            return;
+        }
+    }
 
     let request = match args.as_slice() {
         [cmd] if cmd == "status" => json!({"cmd": "status"}),

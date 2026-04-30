@@ -55,9 +55,11 @@ pub fn fetch_catalog() -> anyhow::Result<Catalog> {
         .into_string()?;
 
     if let Some(parent) = cache.parent() {
-        std::fs::create_dir_all(parent)?;
+        let _ = std::fs::create_dir_all(parent);
     }
-    std::fs::write(cache, &content)?;
+    if let Err(e) = std::fs::write(cache, &content) {
+        eprintln!("flint-ctl: warning: could not write catalog cache: {}", e);
+    }
 
     Ok(toml::from_str(&content)?)
 }
