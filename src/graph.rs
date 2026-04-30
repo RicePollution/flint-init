@@ -361,9 +361,7 @@ mod tests {
         let graph = ServiceGraph::build(services).unwrap();
         let running: HashSet<String> = ["a", "c"].iter().map(|s| s.to_string()).collect();
         let order = graph.shutdown_order(&running);
-        assert!(order.contains(&"c".to_string()));
-        assert!(order.contains(&"a".to_string()));
-        assert_eq!(order.len(), 2);
+        assert_eq!(order, vec!["a".to_string(), "c".to_string()]);
     }
 
     #[test]
