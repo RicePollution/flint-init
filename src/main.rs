@@ -67,7 +67,8 @@ fn main() -> Result<()> {
         graph::ServiceGraph::build(services.clone()).context("building dependency graph")?;
 
     let shared = ctl_proto::new_shared_state();
-    ctl_server::start(shared.clone());
+    let (cmd_tx, _cmd_rx) = ctl_proto::new_command_channel();
+    ctl_server::start(shared.clone(), cmd_tx);
 
     let (ready_tx, ready_rx) = mpsc::channel::<String>();
 

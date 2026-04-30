@@ -13,16 +13,16 @@ pub const CTL_SOCKET_PATH: &str = "/run/flint/ctl.sock";
 /// Spawn the control socket server thread.
 ///
 /// Binds to `CTL_SOCKET_PATH`, accepts connections in a loop, and handles
-/// `status` and `stop` requests by reading/writing `shared`.
-pub fn start(shared: SharedState) {
+/// `status`, `stop`, `start`, `restart`, and `reload` requests.
+pub fn start(shared: SharedState, cmd_tx: crate::ctl_proto::CommandSender) {
     thread::spawn(move || {
-        if let Err(e) = serve(shared) {
+        if let Err(e) = serve(shared, cmd_tx) {
             eprintln!("[ctl] server error: {}", e);
         }
     });
 }
 
-fn serve(shared: SharedState) -> std::io::Result<()> {
+fn serve(shared: SharedState, cmd_tx: crate::ctl_proto::CommandSender) -> std::io::Result<()> {
     let sock_path = Path::new(CTL_SOCKET_PATH);
     if let Some(parent) = sock_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -37,7 +37,8 @@ fn serve(shared: SharedState) -> std::io::Result<()> {
         match stream {
             Ok(stream) => {
                 let shared = shared.clone();
-                thread::spawn(move || handle_connection(stream, shared));
+                let cmd_tx = cmd_tx.clone();
+                thread::spawn(move || handle_connection(stream, shared, cmd_tx));
             }
             Err(e) => eprintln!("[ctl] accept error: {}", e),
         }
@@ -45,7 +46,11 @@ fn serve(shared: SharedState) -> std::io::Result<()> {
     Ok(())
 }
 
-fn handle_connection(stream: std::os::unix::net::UnixStream, shared: SharedState) {
+fn handle_connection(
+    stream: std::os::unix::net::UnixStream,
+    shared: SharedState,
+    cmd_tx: crate::ctl_proto::CommandSender,
+) {
     let mut writer = match stream.try_clone() {
         Ok(w) => w,
         Err(e) => {
@@ -83,11 +88,42 @@ fn handle_connection(stream: std::os::unix::net::UnixStream, shared: SharedState
                     },
                 }
             }
-            Ok(Request::Start { service: _ })
-            | Ok(Request::Restart { service: _ })
-            | Ok(Request::Reload { service: _ }) => Response::Error {
-                error: "not yet implemented".to_string(),
-            },
+            Ok(Request::Start { service }) => {
+                let (tx, rx) = std::sync::mpsc::sync_channel(1);
+                if cmd_tx.send(crate::ctl_proto::CtlCommand::Start { service, reply: tx }).is_err() {
+                    Response::Error { error: "executor disconnected".to_string() }
+                } else {
+                    match rx.recv() {
+                        Ok(Ok(())) => Response::Ok { ok: true },
+                        Ok(Err(e)) => Response::Error { error: e },
+                        Err(_)     => Response::Error { error: "executor disconnected".to_string() },
+                    }
+                }
+            }
+            Ok(Request::Restart { service }) => {
+                let (tx, rx) = std::sync::mpsc::sync_channel(1);
+                if cmd_tx.send(crate::ctl_proto::CtlCommand::Restart { service, reply: tx }).is_err() {
+                    Response::Error { error: "executor disconnected".to_string() }
+                } else {
+                    match rx.recv() {
+                        Ok(Ok(())) => Response::Ok { ok: true },
+                        Ok(Err(e)) => Response::Error { error: e },
+                        Err(_)     => Response::Error { error: "executor disconnected".to_string() },
+                    }
+                }
+            }
+            Ok(Request::Reload { service }) => {
+                let (tx, rx) = std::sync::mpsc::sync_channel(1);
+                if cmd_tx.send(crate::ctl_proto::CtlCommand::Reload { service, reply: tx }).is_err() {
+                    Response::Error { error: "executor disconnected".to_string() }
+                } else {
+                    match rx.recv() {
+                        Ok(Ok(())) => Response::Ok { ok: true },
+                        Ok(Err(e)) => Response::Error { error: e },
+                        Err(_)     => Response::Error { error: "executor disconnected".to_string() },
+                    }
+                }
+            }
             Err(e) => Response::Error {
                 error: format!("invalid request: {}", e),
             },
@@ -112,7 +148,11 @@ mod tests {
     use std::os::unix::net::UnixStream;
     use std::time::Duration;
 
-    fn start_server_on(sock_path: &std::path::Path, shared: SharedState) {
+    fn start_server_on(
+        sock_path: &std::path::Path,
+        shared: SharedState,
+        cmd_tx: crate::ctl_proto::CommandSender,
+    ) {
         let sock_path = sock_path.to_path_buf();
         std::thread::spawn(move || {
             let _ = std::fs::remove_file(&sock_path);
@@ -121,7 +161,8 @@ mod tests {
                 match stream {
                     Ok(s) => {
                         let shared = shared.clone();
-                        std::thread::spawn(move || handle_connection(s, shared));
+                        let cmd_tx = cmd_tx.clone();
+                        std::thread::spawn(move || handle_connection(s, shared, cmd_tx));
                     }
                     Err(_) => break,
                 }
@@ -142,12 +183,26 @@ mod tests {
         line.trim_end().to_string()
     }
 
+    fn mock_executor(cmd_rx: crate::ctl_proto::CommandReceiver) {
+        std::thread::spawn(move || {
+            use crate::ctl_proto::CtlCommand;
+            while let Ok(cmd) = cmd_rx.recv() {
+                match cmd {
+                    CtlCommand::Start   { reply, .. } => { let _ = reply.send(Ok(())); }
+                    CtlCommand::Restart { reply, .. } => { let _ = reply.send(Ok(())); }
+                    CtlCommand::Reload  { reply, .. } => { let _ = reply.send(Ok(())); }
+                }
+            }
+        });
+    }
+
     #[test]
     fn status_returns_empty_when_no_services() {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("ctl.sock");
         let shared = new_shared_state();
-        start_server_on(&sock, shared);
+        let (cmd_tx, _cmd_rx) = crate::ctl_proto::new_command_channel();
+        start_server_on(&sock, shared, cmd_tx);
 
         let resp = send_request(&sock, r#"{"cmd":"status"}"#);
         let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -163,7 +218,8 @@ mod tests {
             "sshd".to_string(),
             ServiceInfo { name: "sshd".to_string(), state: "ready".to_string(), pid: Some(42) },
         );
-        start_server_on(&sock, shared);
+        let (cmd_tx, _cmd_rx) = crate::ctl_proto::new_command_channel();
+        start_server_on(&sock, shared, cmd_tx);
 
         let resp = send_request(&sock, r#"{"cmd":"status"}"#);
         let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -179,7 +235,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("ctl.sock");
         let shared = new_shared_state();
-        start_server_on(&sock, shared);
+        let (cmd_tx, _cmd_rx) = crate::ctl_proto::new_command_channel();
+        start_server_on(&sock, shared, cmd_tx);
 
         let resp = send_request(&sock, r#"{"cmd":"stop","service":"ghost"}"#);
         let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -195,7 +252,8 @@ mod tests {
             "pending-svc".to_string(),
             ServiceInfo { name: "pending-svc".to_string(), state: "pending".to_string(), pid: None },
         );
-        start_server_on(&sock, shared);
+        let (cmd_tx, _cmd_rx) = crate::ctl_proto::new_command_channel();
+        start_server_on(&sock, shared, cmd_tx);
 
         let resp = send_request(&sock, r#"{"cmd":"stop","service":"pending-svc"}"#);
         let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -207,7 +265,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("ctl.sock");
         let shared = new_shared_state();
-        start_server_on(&sock, shared);
+        let (cmd_tx, _cmd_rx) = crate::ctl_proto::new_command_channel();
+        start_server_on(&sock, shared, cmd_tx);
 
         let resp = send_request(&sock, "not json at all");
         let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -219,12 +278,80 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("ctl.sock");
         let shared = new_shared_state();
-        start_server_on(&sock, shared);
+        let (cmd_tx, _cmd_rx) = crate::ctl_proto::new_command_channel();
+        start_server_on(&sock, shared, cmd_tx);
 
         for _ in 0..3 {
             let resp = send_request(&sock, r#"{"cmd":"status"}"#);
             let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
             assert!(v["services"].is_array());
         }
+    }
+
+    #[test]
+    fn start_request_returns_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("ctl.sock");
+        let shared = new_shared_state();
+        let (cmd_tx, cmd_rx) = crate::ctl_proto::new_command_channel();
+        mock_executor(cmd_rx);
+        start_server_on(&sock, shared, cmd_tx);
+
+        let resp = send_request(&sock, r#"{"cmd":"start","service":"sshd"}"#);
+        let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["ok"], true);
+    }
+
+    #[test]
+    fn restart_request_returns_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("ctl.sock");
+        let shared = new_shared_state();
+        let (cmd_tx, cmd_rx) = crate::ctl_proto::new_command_channel();
+        mock_executor(cmd_rx);
+        start_server_on(&sock, shared, cmd_tx);
+
+        let resp = send_request(&sock, r#"{"cmd":"restart","service":"sshd"}"#);
+        let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["ok"], true);
+    }
+
+    #[test]
+    fn reload_request_returns_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("ctl.sock");
+        let shared = new_shared_state();
+        let (cmd_tx, cmd_rx) = crate::ctl_proto::new_command_channel();
+        mock_executor(cmd_rx);
+        start_server_on(&sock, shared, cmd_tx);
+
+        let resp = send_request(&sock, r#"{"cmd":"reload","service":"sshd"}"#);
+        let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["ok"], true);
+    }
+
+    #[test]
+    fn start_request_propagates_executor_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("ctl.sock");
+        let shared = new_shared_state();
+        let (cmd_tx, cmd_rx) = crate::ctl_proto::new_command_channel();
+        // Mock executor that always errors on Start
+        std::thread::spawn(move || {
+            use crate::ctl_proto::CtlCommand;
+            while let Ok(cmd) = cmd_rx.recv() {
+                match cmd {
+                    CtlCommand::Start { reply, .. } => {
+                        let _ = reply.send(Err("already running".to_string()));
+                    }
+                    _ => {}
+                }
+            }
+        });
+        start_server_on(&sock, shared, cmd_tx);
+
+        let resp = send_request(&sock, r#"{"cmd":"start","service":"sshd"}"#);
+        let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert!(v["error"].as_str().unwrap().contains("already running"));
     }
 }
