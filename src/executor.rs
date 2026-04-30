@@ -103,12 +103,27 @@ fn sync_state(shared: &SharedState, name: &str, svc_state: &ServiceState) {
 /// `ready_rx`: receives service names from inotify watchers when a pidfile appears.
 /// When a service is signalled ready (via pidfile OR process exit), its dependents
 /// are unblocked. Each service is only marked ready once (whichever comes first).
+///
+/// Writes `/run/flint/ready` on clean (non-shutdown) exit.
 pub fn run(
+    graph: ServiceGraph,
+    services: Vec<ServiceDef>,
+    ready_rx: Receiver<String>,
+    shutdown: &AtomicBool,
+    shared: SharedState,
+) -> Result<(), ExecutorError> {
+    run_with_marker(graph, services, ready_rx, shutdown, shared, Some("/run/flint/ready"))
+}
+
+/// Like `run`, but with a configurable ready-marker path (for testing).
+/// Pass `None` to skip writing the marker.
+pub fn run_with_marker(
     mut graph: ServiceGraph,
     services: Vec<ServiceDef>,
     ready_rx: Receiver<String>,
     shutdown: &AtomicBool,
     shared: SharedState,
+    ready_marker: Option<&str>,
 ) -> Result<(), ExecutorError> {
     use std::sync::mpsc::TryRecvError;
 
@@ -134,8 +149,42 @@ pub fn run(
     let mut completed = 0usize;
 
     loop {
-        // Graceful shutdown: SIGTERM all tracked children and exit.
+        // Graceful shutdown: stop services in reverse-topological order.
         if shutdown.load(Ordering::SeqCst) {
+            let running_names: HashSet<String> =
+                pid_to_name.values().cloned().collect();
+            let kill_order = graph.shutdown_order(&running_names);
+
+            for name in &kill_order {
+                let Some(pid) = pid_to_name.iter()
+                    .find(|(_, n)| n.as_str() == name.as_str())
+                    .map(|(p, _)| *p)
+                else {
+                    continue;
+                };
+
+                eprintln!("[flint] shutdown: stopping {}", name);
+                let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM);
+
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    match waitpid(pid, Some(WaitPidFlag::WNOHANG)) {
+                        Ok(WaitStatus::StillAlive) => {
+                            if std::time::Instant::now() >= deadline {
+                                eprintln!("[flint] shutdown: SIGKILL {}", name);
+                                let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+                                let _ = waitpid(pid, None);
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                        _ => break,
+                    }
+                }
+                pid_to_name.retain(|p, _| *p != pid);
+            }
+
+            // Kill any remaining PIDs not covered by shutdown_order (edge case).
             for pid in pid_to_name.keys() {
                 let _ = nix::sys::signal::kill(*pid, nix::sys::signal::Signal::SIGTERM);
             }
@@ -302,6 +351,13 @@ pub fn run(
                 Err(nix::Error::EINTR) => {}
                 Err(e) => return Err(ExecutorError::Fork(e)),
             }
+        }
+    }
+
+    // Write the system-ready marker only on clean (non-shutdown) exit.
+    if !shutdown.load(Ordering::SeqCst) {
+        if let Some(marker) = ready_marker {
+            let _ = std::fs::write(marker, "");
         }
     }
 
@@ -591,6 +647,57 @@ mod tests {
         let content = std::fs::read_to_string(&pidfile).unwrap_or_default();
         let pid: u32 = content.trim().parse().expect("pidfile should contain a number");
         assert_ne!(pid, 99999, "stale pidfile was not overwritten by the real service");
+    }
+
+    #[test]
+    fn ready_marker_written_on_clean_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("ready");
+        let marker_str = marker.to_str().unwrap().to_string();
+
+        let svc = make_service_with_needs("quick_svc", &[], &[], "/usr/bin/true");
+        let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
+        let (_, rx) = mpsc::channel();
+        static NO_SHUTDOWN_MARKER: AtomicBool = AtomicBool::new(false);
+        let result = run_with_marker(
+            graph,
+            vec![svc],
+            rx,
+            &NO_SHUTDOWN_MARKER,
+            crate::ctl_proto::new_shared_state(),
+            Some(&marker_str),
+        );
+        assert!(result.is_ok());
+        assert!(marker.exists(), "/run/flint/ready marker was not written");
+    }
+
+    #[test]
+    fn ready_marker_not_written_on_shutdown() {
+        use std::time::Duration;
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("ready");
+        let marker_str = marker.to_str().unwrap().to_string();
+
+        static TEST_SHUTDOWN_MARKER: AtomicBool = AtomicBool::new(false);
+        TEST_SHUTDOWN_MARKER.store(false, Ordering::SeqCst);
+        std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(80));
+            TEST_SHUTDOWN_MARKER.store(true, Ordering::SeqCst);
+        });
+
+        let svc = make_service_with_needs("sleeper_marker", &[], &[], "/usr/bin/sleep 100");
+        let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
+        let (_, rx) = mpsc::channel();
+        let result = run_with_marker(
+            graph,
+            vec![svc],
+            rx,
+            &TEST_SHUTDOWN_MARKER,
+            crate::ctl_proto::new_shared_state(),
+            Some(&marker_str),
+        );
+        assert!(result.is_ok());
+        assert!(!marker.exists(), "ready marker must NOT be written on shutdown");
     }
 
     #[test]
