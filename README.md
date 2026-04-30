@@ -184,6 +184,36 @@ services with optional per-distro filtering. Fetched definitions are cached in
 `/var/cache/flint/catalog.toml` (TTL: 24 hours). New services can be contributed by
 adding a TOML file under `services/<distro>/`.
 
+If a service isn't in the catalog, `flint-ctl scaffold` generates a starter TOML from
+the binary found in `$PATH`:
+
+```
+$ flint-ctl scaffold myapp
+[service]
+name = "myapp"
+exec = "/usr/bin/myapp"   # verify foreground/nodaemon flags
+restart = "on-failure"
+
+# [deps]
+# needs = ["dbus"]
+
+# [ready]
+# strategy = "pidfile"
+# path = "/run/myapp/myapp.pid"
+```
+
+The output goes to stdout so you can review it before writing:
+
+```bash
+flint-ctl scaffold myapp > /etc/flint/services/myapp.toml
+```
+
+The commented sections are optional — fill in `[deps]` if the service requires others
+to be ready first, and `[ready]` if it creates a pidfile or socket you want flint to
+watch. The most important thing to verify is the `exec` line: most daemons need a
+`--foreground` or `--no-daemon` flag to stay in the foreground so flint can supervise
+them.
+
 ---
 
 ## Boot Time Comparison
