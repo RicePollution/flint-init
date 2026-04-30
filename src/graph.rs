@@ -150,6 +150,64 @@ impl ServiceGraph {
     pub fn needs_dependents(&self, name: &str) -> &[String] {
         self.needs_dependents.get(name).map(Vec::as_slice).unwrap_or(&[])
     }
+
+    /// Returns running services in reverse-topological order for graceful shutdown.
+    /// Services that no other running service depends on come first (kill first).
+    /// Services that others depend on come last (kill last).
+    pub fn shutdown_order(&self, running: &std::collections::HashSet<String>) -> Vec<String> {
+        // dep_count[x] = number of running services that depend on x.
+        // A service with dep_count == 0 is a "leaf" in the running set.
+        let mut dep_count: std::collections::HashMap<String, usize> =
+            running.iter().map(|s| (s.clone(), 0usize)).collect();
+
+        for (dep, dependents_of_dep) in &self.dependents {
+            if !running.contains(dep) {
+                continue;
+            }
+            for dependent in dependents_of_dep {
+                if running.contains(dependent) {
+                    *dep_count.entry(dep.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        let mut remaining: std::collections::HashSet<String> = running.clone();
+        let mut order: Vec<String> = Vec::with_capacity(running.len());
+
+        while !remaining.is_empty() {
+            let mut leaves: Vec<String> = remaining
+                .iter()
+                .filter(|s| dep_count.get(*s).copied().unwrap_or(0) == 0)
+                .cloned()
+                .collect();
+            leaves.sort();
+
+            if leaves.is_empty() {
+                // Shouldn't happen for a validated acyclic graph; drain remaining.
+                let mut rest: Vec<String> = remaining.iter().cloned().collect();
+                rest.sort();
+                order.extend(rest);
+                break;
+            }
+
+            for leaf in &leaves {
+                remaining.remove(leaf);
+                // leaf is being removed from running. Decrement dep_count for
+                // services that leaf depended on (i.e., services x where leaf ∈ dependents[x]).
+                for (dep, dependents_of_dep) in &self.dependents {
+                    if remaining.contains(dep) && dependents_of_dep.contains(leaf) {
+                        let c = dep_count.entry(dep.clone()).or_insert(0);
+                        if *c > 0 {
+                            *c -= 1;
+                        }
+                    }
+                }
+            }
+            order.extend(leaves);
+        }
+
+        order
+    }
 }
 
 #[cfg(test)]
@@ -272,5 +330,58 @@ mod tests {
         let services = vec![make_service("a", &[], &[])];
         let graph = ServiceGraph::build(services).unwrap();
         assert_eq!(graph.needs_dependents("nonexistent"), &[] as &[String]);
+    }
+
+    #[test]
+    fn shutdown_order_is_reverse_topological() {
+        use std::collections::HashSet;
+        // Chain: a → b → c (b depends on a, c depends on b)
+        // Startup order: a, b, c
+        // Shutdown order: c first, then b, then a
+        let services = vec![
+            make_service("a", &[], &[]),
+            make_service("b", &["a"], &[]),
+            make_service("c", &["b"], &[]),
+        ];
+        let graph = ServiceGraph::build(services).unwrap();
+        let running: HashSet<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+        let order = graph.shutdown_order(&running);
+        assert_eq!(order, vec!["c", "b", "a"]);
+    }
+
+    #[test]
+    fn shutdown_order_skips_non_running_services() {
+        use std::collections::HashSet;
+        // a → b → c, but only a and c are running (b already exited).
+        let services = vec![
+            make_service("a", &[], &[]),
+            make_service("b", &["a"], &[]),
+            make_service("c", &["b"], &[]),
+        ];
+        let graph = ServiceGraph::build(services).unwrap();
+        let running: HashSet<String> = ["a", "c"].iter().map(|s| s.to_string()).collect();
+        let order = graph.shutdown_order(&running);
+        assert!(order.contains(&"c".to_string()));
+        assert!(order.contains(&"a".to_string()));
+        assert_eq!(order.len(), 2);
+    }
+
+    #[test]
+    fn shutdown_order_diamond() {
+        use std::collections::HashSet;
+        // root → left, root → right, left → leaf, right → leaf
+        let services = vec![
+            make_service("root", &[], &[]),
+            make_service("left", &["root"], &[]),
+            make_service("right", &["root"], &[]),
+            make_service("leaf", &["left", "right"], &[]),
+        ];
+        let graph = ServiceGraph::build(services).unwrap();
+        let running: HashSet<String> =
+            ["root", "left", "right", "leaf"].iter().map(|s| s.to_string()).collect();
+        let order = graph.shutdown_order(&running);
+        assert_eq!(order.len(), 4);
+        assert_eq!(order[0], "leaf", "leaf must be killed first");
+        assert_eq!(order[3], "root", "root must be killed last");
     }
 }
