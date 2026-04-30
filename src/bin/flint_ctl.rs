@@ -17,6 +17,17 @@ fn usage() -> ! {
     process::exit(1);
 }
 
+const SERVICES_DIR: &str = "/etc/flint/services";
+
+fn prompt(msg: &str) -> bool {
+    use std::io::Write;
+    print!("{}", msg);
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).ok();
+    matches!(line.trim().to_lowercase().as_str(), "y" | "yes")
+}
+
 fn cmd_get_list() {
     let distro = catalog::detect_distro();
     let cat = catalog::fetch_catalog().unwrap_or_else(|e| {
@@ -36,12 +47,85 @@ fn cmd_get_list() {
     }
 }
 
+fn fetch_and_install(name: &str, distro: &str) {
+    let services_dir = std::path::Path::new(SERVICES_DIR);
+    let dest = services_dir.join(format!("{}.toml", name));
+
+    if dest.exists() && !prompt(&format!("{}.toml already exists — overwrite? [y/N] ", name)) {
+        return;
+    }
+
+    let toml_str = catalog::fetch_service_toml(distro, name).unwrap_or_else(|e| {
+        eprintln!("flint-ctl: {}", e);
+        process::exit(1);
+    });
+
+    let missing = catalog::missing_deps(&toml_str, services_dir).unwrap_or_else(|e| {
+        eprintln!("flint-ctl: failed to parse deps for {}: {}", name, e);
+        process::exit(1);
+    });
+
+    std::fs::create_dir_all(services_dir).unwrap_or_else(|e| {
+        eprintln!("flint-ctl: cannot create {}: {}", SERVICES_DIR, e);
+        process::exit(1);
+    });
+    std::fs::write(&dest, &toml_str).unwrap_or_else(|e| {
+        eprintln!("flint-ctl: cannot write {}: {}", dest.display(), e);
+        process::exit(1);
+    });
+    println!("installed: {}", dest.display());
+
+    let mut skipped: Vec<String> = Vec::new();
+    for dep in missing {
+        if prompt(&format!("{} requires {} — fetch it too? [y/N] ", name, dep)) {
+            fetch_and_install(&dep, distro);
+        } else {
+            skipped.push(dep);
+        }
+    }
+    for dep in &skipped {
+        eprintln!("warning: {} installed but {} is missing.", name, dep);
+    }
+}
+
+fn cmd_get(name: &str) {
+    let distro = catalog::detect_distro();
+    let cat = catalog::fetch_catalog().unwrap_or_else(|e| {
+        eprintln!("flint-ctl: {}", e);
+        process::exit(1);
+    });
+
+    let entry = cat.get(name).unwrap_or_else(|| {
+        eprintln!(
+            "flint-ctl: \"{}\" not found in catalog. Run flint-ctl get --list to see available services.",
+            name
+        );
+        process::exit(1);
+    });
+
+    if let Some(distros) = &entry.distros {
+        if !distros.iter().any(|d| d == &distro) {
+            eprintln!("flint-ctl: \"{}\" is not available for {}.", name, distro);
+            process::exit(1);
+        }
+    }
+
+    fetch_and_install(name, &distro);
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if let [cmd, flag] = args.as_slice() {
         if cmd == "get" && flag == "--list" {
             cmd_get_list();
+            return;
+        }
+    }
+
+    if let [cmd, name] = args.as_slice() {
+        if cmd == "get" {
+            cmd_get(name);
             return;
         }
     }
