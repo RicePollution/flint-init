@@ -74,6 +74,16 @@ pub fn fetch_service_toml(distro: &str, name: &str) -> anyhow::Result<String> {
     Ok(content)
 }
 
+pub fn missing_deps(toml_str: &str, services_dir: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    let def: crate::service::ServiceDef = toml::from_str(toml_str)?;
+    let needs = def.deps.map(|d| d.needs).unwrap_or_default();
+    let missing = needs
+        .into_iter()
+        .filter(|dep| !services_dir.join(format!("{}.toml", dep)).exists())
+        .collect();
+    Ok(missing)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,6 +130,49 @@ description = "OpenSSH daemon"
         let catalog: Catalog = toml::from_str(toml).unwrap();
         assert_eq!(catalog["sshd"].description, "OpenSSH daemon");
         assert!(catalog["sshd"].distros.is_none());
+    }
+
+    #[test]
+    fn missing_deps_returns_deps_not_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        // dbus.toml exists, networkmanager does not
+        std::fs::write(dir.path().join("dbus.toml"), "[service]\nname=\"dbus\"\nexec=\"/bin/dbus\"\n").unwrap();
+
+        let toml_str = r#"
+[service]
+name = "networkmanager"
+exec = "/usr/bin/NetworkManager"
+
+[deps]
+needs = ["dbus", "udev"]
+"#;
+        let missing = missing_deps(toml_str, dir.path()).unwrap();
+        assert_eq!(missing, vec!["udev"]);
+    }
+
+    #[test]
+    fn missing_deps_no_deps_section_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml_str = "[service]\nname = \"foo\"\nexec = \"/bin/foo\"\n";
+        let missing = missing_deps(toml_str, dir.path()).unwrap();
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn missing_deps_all_present_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("dbus.toml"), "[service]\nname=\"dbus\"\nexec=\"/bin/dbus\"\n").unwrap();
+
+        let toml_str = r#"
+[service]
+name = "sshd"
+exec = "/usr/bin/sshd"
+
+[deps]
+needs = ["dbus"]
+"#;
+        let missing = missing_deps(toml_str, dir.path()).unwrap();
+        assert!(missing.is_empty());
     }
 
     #[test]
