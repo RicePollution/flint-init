@@ -1,4 +1,4 @@
 [service]
 name = "agetty-tty3"
-exec = "/sbin/agetty --noclear tty3 38400 linux"
+exec = "/usr/bin/agetty --noclear tty3 38400 linux"
 restart = "always"

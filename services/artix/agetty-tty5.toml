@@ -1,4 +1,4 @@
 [service]
 name = "agetty-tty5"
-exec = "/sbin/agetty --noclear tty5 38400 linux"
+exec = "/usr/bin/agetty --noclear tty5 38400 linux"
 restart = "always"
