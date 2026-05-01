@@ -11,7 +11,10 @@ fn usage() -> ! {
     eprintln!("Usage: flint-ctl <command> [args]");
     eprintln!("Commands:");
     eprintln!("  status               List all service states");
+    eprintln!("  start <service>      Start a stopped service");
     eprintln!("  stop <service>       Send SIGTERM to a running service");
+    eprintln!("  restart <service>    Restart a service (start if stopped)");
+    eprintln!("  reload <service>     SIGHUP + restart if config changed");
     eprintln!("  get --list           List services available in the catalog");
     eprintln!("  get <service>        Fetch and install a service from the catalog");
     eprintln!("  scaffold <service>   Print a starter TOML for a service not in the catalog");
@@ -172,7 +175,10 @@ fn main() {
 
     let request = match args.as_slice() {
         [cmd] if cmd == "status" => json!({"cmd": "status"}),
-        [cmd, svc] if cmd == "stop" => json!({"cmd": "stop", "service": svc}),
+        [cmd, svc] if cmd == "stop"    => json!({"cmd": "stop",    "service": svc}),
+        [cmd, svc] if cmd == "start"   => json!({"cmd": "start",   "service": svc}),
+        [cmd, svc] if cmd == "restart" => json!({"cmd": "restart", "service": svc}),
+        [cmd, svc] if cmd == "reload"  => json!({"cmd": "reload",  "service": svc}),
         _ => usage(),
     };
 
