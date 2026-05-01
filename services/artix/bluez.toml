@@ -4,7 +4,8 @@ exec = "/usr/lib/bluetooth/bluetoothd --nodetach"
 restart = "never"
 
 [deps]
-needs = ["dbus", "udev-trigger"]
+needs = ["dbus"]
+after = ["udev-trigger"]
 
 [ready]
 strategy = "socket"

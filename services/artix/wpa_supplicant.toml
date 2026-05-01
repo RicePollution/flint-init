@@ -4,7 +4,7 @@ exec = "/usr/bin/wpa_supplicant -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant-w
 restart = "never"
 
 [deps]
-needs = ["udev-trigger"]
+after = ["udev-trigger"]
 
 [ready]
 strategy = "socket"

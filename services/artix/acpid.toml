@@ -4,7 +4,7 @@ exec = "/usr/bin/acpid --foreground --netlink"
 restart = "never"
 
 [deps]
-needs = ["udev-trigger"]
+after = ["udev-trigger"]
 
 [ready]
 strategy = "socket"
