@@ -40,29 +40,36 @@ impl ServiceGraph {
         }
 
         for svc in &services {
-            let all_deps: Vec<String> = svc
-                .deps
-                .as_ref()
-                .map(|d| {
-                    d.after
-                        .iter()
-                        .chain(d.needs.iter())
-                        .cloned()
-                        .collect::<HashSet<_>>()
-                        .into_iter()
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            for dep in &all_deps {
-                if !service_names.contains(dep) {
-                    return Err(GraphError::UnknownDep {
-                        service: svc.service.name.clone(),
-                        dep: dep.clone(),
-                    });
+            if let Some(deps) = &svc.deps {
+                // `needs` deps: hard error if unknown
+                let unique_needs: HashSet<&String> = deps.needs.iter().collect();
+                for dep in &unique_needs {
+                    if !service_names.contains(*dep) {
+                        return Err(GraphError::UnknownDep {
+                            service: svc.service.name.clone(),
+                            dep: dep.to_string(),
+                        });
+                    }
                 }
-                dependents.entry(dep.clone()).or_default().push(svc.service.name.clone());
-                *in_degree.entry(svc.service.name.clone()).or_insert(0) += 1;
+
+                // All edges (after + needs): build DAG, skip unknown `after` deps silently
+                let all_deps: Vec<String> = deps
+                    .after
+                    .iter()
+                    .chain(deps.needs.iter())
+                    .cloned()
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect();
+
+                for dep in &all_deps {
+                    if !service_names.contains(dep) {
+                        // Unknown `after`-only dep — ordering hint, skip silently
+                        continue;
+                    }
+                    dependents.entry(dep.clone()).or_default().push(svc.service.name.clone());
+                    *in_degree.entry(svc.service.name.clone()).or_insert(0) += 1;
+                }
             }
         }
 

@@ -19,7 +19,7 @@ _ACQUIRE_TMPDIR=""
 
 # Overridable for tests
 _FLINT_OS_RELEASE="${_FLINT_OS_RELEASE:-/etc/os-release}"
-_FLINT_COMMON_DIR="${_FLINT_COMMON_DIR:-$REPO_ROOT/services/common}"
+_FLINT_COMMON_DIR="${_FLINT_COMMON_DIR:-$REPO_ROOT/services/global}"
 
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
