@@ -1,14 +1,14 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{execv, fork, ForkResult, Pid};
 use thiserror::Error;
 
-use crate::ctl_proto::{self, SharedState};
+use crate::ctl_proto::{self, CommandReceiver, CtlCommand, ReplySender, SharedState};
 use crate::graph::ServiceGraph;
 use flint_init::service::{RestartPolicy, ServiceDef};
 
@@ -111,8 +111,10 @@ pub fn run(
     ready_rx: Receiver<String>,
     shutdown: &AtomicBool,
     shared: SharedState,
+    command_rx: CommandReceiver,
+    service_dir: Option<std::path::PathBuf>,
 ) -> Result<(), ExecutorError> {
-    run_with_marker(graph, services, ready_rx, shutdown, shared, Some("/run/flint/ready"))
+    run_with_marker(graph, services, ready_rx, shutdown, shared, Some("/run/flint/ready"), command_rx, service_dir)
 }
 
 /// Like `run`, but with a configurable ready-marker path (for testing).
@@ -124,10 +126,10 @@ pub fn run_with_marker(
     shutdown: &AtomicBool,
     shared: SharedState,
     ready_marker: Option<&str>,
+    command_rx: CommandReceiver,
+    service_dir: Option<std::path::PathBuf>,
 ) -> Result<(), ExecutorError> {
-    use std::sync::mpsc::TryRecvError;
-
-    let svc_by_name: HashMap<String, ServiceDef> =
+    let mut svc_by_name: HashMap<String, ServiceDef> =
         services.into_iter().map(|s| (s.service.name.clone(), s)).collect();
 
     let mut pid_to_name: HashMap<Pid, String> = HashMap::new();
@@ -138,6 +140,20 @@ pub fn run_with_marker(
         .keys()
         .map(|n| (n.clone(), ServiceState::Pending))
         .collect();
+
+    let mut pending_restart: HashSet<String> = HashSet::new();
+    let mut restart_replies: HashMap<String, ReplySender> = HashMap::new();
+
+    // Load raw TOML strings for reload diff comparison.
+    let mut service_raw: HashMap<String, String> = HashMap::new();
+    if let Some(ref dir) = service_dir {
+        for name in svc_by_name.keys() {
+            let path = dir.join(format!("{}.toml", name));
+            if let Ok(s) = std::fs::read_to_string(&path) {
+                service_raw.insert(name.clone(), s);
+            }
+        }
+    }
 
     // Initialise shared state with Pending for all services.
     for name in service_states.keys() {
@@ -218,6 +234,129 @@ pub fn run_with_marker(
             break;
         }
 
+        // Drain ctl commands (start / restart / reload)
+        loop {
+            match command_rx.try_recv() {
+                Ok(CtlCommand::Start { service, reply }) => {
+                    match service_states.get(&service) {
+                        Some(ServiceState::Running(_)) | Some(ServiceState::Ready) => {
+                            let _ = reply.send(Err(format!("service '{}' is already running", service)));
+                        }
+                        None => {
+                            let _ = reply.send(Err(format!("unknown service '{}'", service)));
+                        }
+                        _ => match svc_by_name.get(&service) {
+                            None => { let _ = reply.send(Err(format!("unknown service '{}'", service))); }
+                            Some(def) => match spawn_service(def) {
+                                Err(e) => { let _ = reply.send(Err(format!("spawn failed: {:?}", e))); }
+                                Ok(pid) => {
+                                    service_states.insert(service.clone(), ServiceState::Running(pid));
+                                    sync_state(&shared, &service, &ServiceState::Running(pid));
+                                    pid_to_name.insert(pid, service.clone());
+                                    let _ = reply.send(Ok(()));
+                                }
+                            },
+                        },
+                    }
+                }
+                Ok(CtlCommand::Restart { service, reply }) => {
+                    match service_states.get(&service).cloned() {
+                        None => {
+                            let _ = reply.send(Err(format!("unknown service '{}'", service)));
+                        }
+                        Some(ServiceState::Running(_)) | Some(ServiceState::Ready) => {
+                            if let Some(pid) = pid_to_name.iter()
+                                .find(|(_, n)| n.as_str() == service.as_str())
+                                .map(|(p, _)| *p)
+                            {
+                                let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM);
+                            }
+                            pending_restart.insert(service.clone());
+                            restart_replies.insert(service.clone(), reply);
+                        }
+                        _ => match svc_by_name.get(&service) {
+                            None => { let _ = reply.send(Err(format!("unknown service '{}'", service))); }
+                            Some(def) => match spawn_service(def) {
+                                Err(e) => { let _ = reply.send(Err(format!("spawn failed: {:?}", e))); }
+                                Ok(pid) => {
+                                    service_states.insert(service.clone(), ServiceState::Running(pid));
+                                    sync_state(&shared, &service, &ServiceState::Running(pid));
+                                    pid_to_name.insert(pid, service.clone());
+                                    let _ = reply.send(Ok(()));
+                                }
+                            },
+                        },
+                    }
+                }
+                Ok(CtlCommand::Reload { service, reply }) => {
+                    // Step 1: SIGHUP if process is running
+                    if let Some(pid) = pid_to_name.iter()
+                        .find(|(_, n)| n.as_str() == service.as_str())
+                        .map(|(p, _)| *p)
+                    {
+                        let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGHUP);
+                    }
+
+                    // Step 2: re-read TOML and compare
+                    match &service_dir {
+                        None => {
+                            // No dir configured — SIGHUP was sent, nothing more to do
+                            let _ = reply.send(Ok(()));
+                        }
+                        Some(dir) => {
+                            let path = dir.join(format!("{}.toml", service));
+                            match std::fs::read_to_string(&path) {
+                                Err(e) => {
+                                    let _ = reply.send(Err(format!("cannot read {:?}: {}", path, e)));
+                                }
+                                Ok(new_raw) => {
+                                    let old_raw = service_raw.get(&service).map(|s| s.as_str()).unwrap_or("");
+                                    if new_raw.trim() == old_raw.trim() {
+                                        // Config unchanged — SIGHUP already sent
+                                        let _ = reply.send(Ok(()));
+                                    } else {
+                                        // Config changed — parse and restart
+                                        match toml::from_str::<ServiceDef>(&new_raw) {
+                                            Err(e) => {
+                                                let _ = reply.send(Err(format!("parse error: {}", e)));
+                                            }
+                                            Ok(new_def) => {
+                                                service_raw.insert(service.clone(), new_raw);
+                                                svc_by_name.insert(service.clone(), new_def);
+                                                // Trigger restart (same as Restart on running service)
+                                                if let Some(pid) = pid_to_name.iter()
+                                                    .find(|(_, n)| n.as_str() == service.as_str())
+                                                    .map(|(p, _)| *p)
+                                                {
+                                                    let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM);
+                                                    pending_restart.insert(service.clone());
+                                                    restart_replies.insert(service.clone(), reply);
+                                                } else {
+                                                    match svc_by_name.get(&service) {
+                                                        None => { let _ = reply.send(Err(format!("unknown service '{}'", service))); }
+                                                        Some(def) => match spawn_service(def) {
+                                                            Err(e) => { let _ = reply.send(Err(format!("spawn failed: {:?}", e))); }
+                                                            Ok(pid) => {
+                                                                service_states.insert(service.clone(), ServiceState::Running(pid));
+                                                                sync_state(&shared, &service, &ServiceState::Running(pid));
+                                                                pid_to_name.insert(pid, service.clone());
+                                                                let _ = reply.send(Ok(()));
+                                                            }
+                                                        },
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+            }
+        }
+
         // Drain inotify readiness signals
         loop {
             match ready_rx.try_recv() {
@@ -295,38 +434,60 @@ pub fn run_with_marker(
                 Ok(WaitStatus::Exited(pid, code)) => {
                     if let Some(name) = pid_to_name.remove(&pid) {
                         eprintln!("[flint] exited: {} (code={})", name, code);
-                        let policy = svc_by_name.get(&name).and_then(|d| d.service.restart.as_ref());
-                        let count = restart_counts.entry(name.clone()).or_insert(0);
-                        if should_restart(policy, code, false)
-                            && *count < MAX_RESTARTS
-                            && !shutdown.load(Ordering::SeqCst)
-                        {
-                            *count += 1;
-                            eprintln!("[flint] restarting: {} (attempt {}/{})", name, count, MAX_RESTARTS);
-                            let new_pid = spawn_service(svc_by_name.get(&name).unwrap())?;
-                            service_states.insert(name.clone(), ServiceState::Running(new_pid));
-                            sync_state(&shared, &name, &ServiceState::Running(new_pid));
-                            pid_to_name.insert(new_pid, name);
-                        } else {
-                            let exhausted = should_restart(policy, code, false) && *count >= MAX_RESTARTS;
-                            let failed = exhausted || code != 0;
-                            if exhausted {
-                                eprintln!("[flint] failed: {} (max restarts exceeded)", name);
-                                service_states.insert(name.clone(), ServiceState::Failed);
-                                sync_state(&shared, &name, &ServiceState::Failed);
-                            } else {
-                                service_states.insert(name.clone(), ServiceState::Exited { code });
-                                sync_state(&shared, &name, &ServiceState::Exited { code });
-                            }
-                            completed += 1;
-                            if failed && !ready_reported.contains(&name) {
-                                for dep in graph.needs_dependents(&name) {
-                                    blocked_services.insert(dep.clone());
+
+                        // Manual restart takes priority over automatic restart policy.
+                        if pending_restart.remove(&name) {
+                            match spawn_service(svc_by_name.get(&name).unwrap()) {
+                                Ok(new_pid) => {
+                                    service_states.insert(name.clone(), ServiceState::Running(new_pid));
+                                    sync_state(&shared, &name, &ServiceState::Running(new_pid));
+                                    pid_to_name.insert(new_pid, name.clone());
+                                    if let Some(reply) = restart_replies.remove(&name) {
+                                        let _ = reply.send(Ok(()));
+                                    }
+                                }
+                                Err(e) => {
+                                    if let Some(reply) = restart_replies.remove(&name) {
+                                        let _ = reply.send(Err(format!("spawn failed: {:?}", e)));
+                                    }
+                                    service_states.insert(name.clone(), ServiceState::Failed);
+                                    sync_state(&shared, &name, &ServiceState::Failed);
                                 }
                             }
-                            if ready_reported.insert(name.clone()) {
-                                let newly = graph.mark_ready(&name);
-                                to_start.extend(newly);
+                        } else {
+                            let policy = svc_by_name.get(&name).and_then(|d| d.service.restart.as_ref());
+                            let count = restart_counts.entry(name.clone()).or_insert(0);
+                            if should_restart(policy, code, false)
+                                && *count < MAX_RESTARTS
+                                && !shutdown.load(Ordering::SeqCst)
+                            {
+                                *count += 1;
+                                eprintln!("[flint] restarting: {} (attempt {}/{})", name, count, MAX_RESTARTS);
+                                let new_pid = spawn_service(svc_by_name.get(&name).unwrap())?;
+                                service_states.insert(name.clone(), ServiceState::Running(new_pid));
+                                sync_state(&shared, &name, &ServiceState::Running(new_pid));
+                                pid_to_name.insert(new_pid, name);
+                            } else {
+                                let exhausted = should_restart(policy, code, false) && *count >= MAX_RESTARTS;
+                                let failed = exhausted || code != 0;
+                                if exhausted {
+                                    eprintln!("[flint] failed: {} (max restarts exceeded)", name);
+                                    service_states.insert(name.clone(), ServiceState::Failed);
+                                    sync_state(&shared, &name, &ServiceState::Failed);
+                                } else {
+                                    service_states.insert(name.clone(), ServiceState::Exited { code });
+                                    sync_state(&shared, &name, &ServiceState::Exited { code });
+                                }
+                                completed += 1;
+                                if failed && !ready_reported.contains(&name) {
+                                    for dep in graph.needs_dependents(&name) {
+                                        blocked_services.insert(dep.clone());
+                                    }
+                                }
+                                if ready_reported.insert(name.clone()) {
+                                    let newly = graph.mark_ready(&name);
+                                    to_start.extend(newly);
+                                }
                             }
                         }
                     }
@@ -334,36 +495,58 @@ pub fn run_with_marker(
                 Ok(WaitStatus::Signaled(pid, sig, _)) => {
                     if let Some(name) = pid_to_name.remove(&pid) {
                         eprintln!("[flint] killed: {} (signal={:?})", name, sig);
-                        let policy = svc_by_name.get(&name).and_then(|d| d.service.restart.as_ref());
-                        let count = restart_counts.entry(name.clone()).or_insert(0);
-                        if should_restart(policy, 1, true)
-                            && *count < MAX_RESTARTS
-                            && !shutdown.load(Ordering::SeqCst)
-                        {
-                            *count += 1;
-                            eprintln!("[flint] restarting: {} (attempt {}/{})", name, count, MAX_RESTARTS);
-                            let new_pid = spawn_service(svc_by_name.get(&name).unwrap())?;
-                            service_states.insert(name.clone(), ServiceState::Running(new_pid));
-                            sync_state(&shared, &name, &ServiceState::Running(new_pid));
-                            pid_to_name.insert(new_pid, name);
-                        } else {
-                            if should_restart(policy, 1, true) && *count >= MAX_RESTARTS {
-                                eprintln!("[flint] failed: {} (max restarts exceeded)", name);
-                                service_states.insert(name.clone(), ServiceState::Failed);
-                                sync_state(&shared, &name, &ServiceState::Failed);
-                            } else {
-                                service_states.insert(name.clone(), ServiceState::Exited { code: -1 });
-                                sync_state(&shared, &name, &ServiceState::Exited { code: -1 });
-                            }
-                            completed += 1;
-                            if !ready_reported.contains(&name) {
-                                for dep in graph.needs_dependents(&name) {
-                                    blocked_services.insert(dep.clone());
+
+                        // Manual restart takes priority over automatic restart policy.
+                        if pending_restart.remove(&name) {
+                            match spawn_service(svc_by_name.get(&name).unwrap()) {
+                                Ok(new_pid) => {
+                                    service_states.insert(name.clone(), ServiceState::Running(new_pid));
+                                    sync_state(&shared, &name, &ServiceState::Running(new_pid));
+                                    pid_to_name.insert(new_pid, name.clone());
+                                    if let Some(reply) = restart_replies.remove(&name) {
+                                        let _ = reply.send(Ok(()));
+                                    }
+                                }
+                                Err(e) => {
+                                    if let Some(reply) = restart_replies.remove(&name) {
+                                        let _ = reply.send(Err(format!("spawn failed: {:?}", e)));
+                                    }
+                                    service_states.insert(name.clone(), ServiceState::Failed);
+                                    sync_state(&shared, &name, &ServiceState::Failed);
                                 }
                             }
-                            if ready_reported.insert(name.clone()) {
-                                let newly = graph.mark_ready(&name);
-                                to_start.extend(newly);
+                        } else {
+                            let policy = svc_by_name.get(&name).and_then(|d| d.service.restart.as_ref());
+                            let count = restart_counts.entry(name.clone()).or_insert(0);
+                            if should_restart(policy, 1, true)
+                                && *count < MAX_RESTARTS
+                                && !shutdown.load(Ordering::SeqCst)
+                            {
+                                *count += 1;
+                                eprintln!("[flint] restarting: {} (attempt {}/{})", name, count, MAX_RESTARTS);
+                                let new_pid = spawn_service(svc_by_name.get(&name).unwrap())?;
+                                service_states.insert(name.clone(), ServiceState::Running(new_pid));
+                                sync_state(&shared, &name, &ServiceState::Running(new_pid));
+                                pid_to_name.insert(new_pid, name);
+                            } else {
+                                if should_restart(policy, 1, true) && *count >= MAX_RESTARTS {
+                                    eprintln!("[flint] failed: {} (max restarts exceeded)", name);
+                                    service_states.insert(name.clone(), ServiceState::Failed);
+                                    sync_state(&shared, &name, &ServiceState::Failed);
+                                } else {
+                                    service_states.insert(name.clone(), ServiceState::Exited { code: -1 });
+                                    sync_state(&shared, &name, &ServiceState::Exited { code: -1 });
+                                }
+                                completed += 1;
+                                if !ready_reported.contains(&name) {
+                                    for dep in graph.needs_dependents(&name) {
+                                        blocked_services.insert(dep.clone());
+                                    }
+                                }
+                                if ready_reported.insert(name.clone()) {
+                                    let newly = graph.mark_ready(&name);
+                                    to_start.extend(newly);
+                                }
                             }
                         }
                     }
@@ -390,6 +573,19 @@ pub fn run_with_marker(
 
     eprintln!("[flint] done ({} services)", completed);
     Ok(())
+}
+
+/// Like `run`, but without the ready-marker (for tests).
+pub fn run_with_cmd(
+    graph: ServiceGraph,
+    services: Vec<ServiceDef>,
+    ready_rx: Receiver<String>,
+    shutdown: &AtomicBool,
+    shared: SharedState,
+    command_rx: CommandReceiver,
+    service_dir: Option<std::path::PathBuf>,
+) -> Result<(), ExecutorError> {
+    run_with_marker(graph, services, ready_rx, shutdown, shared, None, command_rx, service_dir)
 }
 
 #[cfg(test)]
@@ -489,8 +685,9 @@ mod tests {
 
     fn run_no_ready(graph: ServiceGraph, services: Vec<ServiceDef>) -> Result<(), ExecutorError> {
         let (_, rx) = mpsc::channel();
+        let (_, cmd_rx) = crate::ctl_proto::new_command_channel();
         static NO_SHUTDOWN: AtomicBool = AtomicBool::new(false);
-        run(graph, services, rx, &NO_SHUTDOWN, crate::ctl_proto::new_shared_state())
+        run(graph, services, rx, &NO_SHUTDOWN, crate::ctl_proto::new_shared_state(), cmd_rx, None)
     }
 
     #[test]
@@ -508,7 +705,8 @@ mod tests {
         let svc = make_service_with_needs("sleeper", &[], &[], "/usr/bin/sleep 100");
         let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
         let (_, rx) = mpsc::channel();
-        let result = run(graph, vec![svc], rx, &TEST_SHUTDOWN, crate::ctl_proto::new_shared_state());
+        let (_, cmd_rx) = crate::ctl_proto::new_command_channel();
+        let result = run(graph, vec![svc], rx, &TEST_SHUTDOWN, crate::ctl_proto::new_shared_state(), cmd_rx, None);
         assert!(result.is_ok());
     }
 
@@ -661,12 +859,15 @@ mod tests {
         drop(ready_tx);
 
         static NO_SHUTDOWN_STALE: AtomicBool = AtomicBool::new(false);
+        let (_, cmd_rx) = crate::ctl_proto::new_command_channel();
         let result = run(
             graph,
             vec![svc],
             ready_rx,
             &NO_SHUTDOWN_STALE,
             crate::ctl_proto::new_shared_state(),
+            cmd_rx,
+            None,
         );
         assert!(result.is_ok());
 
@@ -685,6 +886,7 @@ mod tests {
         let svc = make_service_with_needs("quick_svc", &[], &[], "/usr/bin/true");
         let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
         let (_, rx) = mpsc::channel();
+        let (_, cmd_rx) = crate::ctl_proto::new_command_channel();
         static NO_SHUTDOWN_MARKER: AtomicBool = AtomicBool::new(false);
         let result = run_with_marker(
             graph,
@@ -693,6 +895,8 @@ mod tests {
             &NO_SHUTDOWN_MARKER,
             crate::ctl_proto::new_shared_state(),
             Some(&marker_str),
+            cmd_rx,
+            None,
         );
         assert!(result.is_ok());
         assert!(marker.exists(), "/run/flint/ready marker was not written");
@@ -715,6 +919,7 @@ mod tests {
         let svc = make_service_with_needs("sleeper_marker", &[], &[], "/usr/bin/sleep 100");
         let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
         let (_, rx) = mpsc::channel();
+        let (_, cmd_rx) = crate::ctl_proto::new_command_channel();
         let result = run_with_marker(
             graph,
             vec![svc],
@@ -722,6 +927,8 @@ mod tests {
             &TEST_SHUTDOWN_MARKER,
             crate::ctl_proto::new_shared_state(),
             Some(&marker_str),
+            cmd_rx,
+            None,
         );
         assert!(result.is_ok());
         assert!(!marker.exists(), "ready marker must NOT be written on shutdown");
@@ -743,5 +950,81 @@ mod tests {
         let services = vec![base, dep];
         let graph = ServiceGraph::build(services.clone()).unwrap();
         assert!(run_no_ready(graph, services).is_ok());
+    }
+
+    // --- Command channel tests ---
+
+    #[test]
+    fn start_command_on_exited_service_respawns_it() {
+        use crate::ctl_proto::{new_command_channel, new_shared_state, CtlCommand};
+
+        // Service that exits immediately
+        let svc = make_service_with_needs("short", &[], &[], "/bin/true");
+        let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
+        let (ready_tx, ready_rx) = mpsc::channel::<String>();
+        drop(ready_tx);
+        static SD: AtomicBool = AtomicBool::new(false);
+        let shared = new_shared_state();
+        let (cmd_tx, cmd_rx) = new_command_channel();
+
+        // Let the service start and exit, then send a start command
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+            cmd_tx.send(CtlCommand::Start { service: "short".to_string(), reply: reply_tx }).unwrap();
+            let result = reply_rx.recv().unwrap();
+            assert!(result.is_ok(), "expected ok but got {:?}", result);
+        });
+
+        run_with_cmd(graph, vec![svc], ready_rx, &SD, shared, cmd_rx, None).unwrap();
+    }
+
+    #[test]
+    fn start_command_on_running_service_returns_error() {
+        use crate::ctl_proto::{new_command_channel, new_shared_state, CtlCommand};
+
+        static SD2: AtomicBool = AtomicBool::new(false);
+
+        let svc = make_service_with_needs("longsvc", &[], &[], "/usr/bin/sleep 10");
+        let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
+        let (ready_tx, ready_rx) = mpsc::channel::<String>();
+        drop(ready_tx);
+        let shared = new_shared_state();
+        let (cmd_tx, cmd_rx) = new_command_channel();
+
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+            cmd_tx.send(CtlCommand::Start { service: "longsvc".to_string(), reply: reply_tx }).unwrap();
+            let result = reply_rx.recv().unwrap();
+            assert!(result.is_err(), "expected error but got ok");
+            // After getting the error, trigger shutdown
+            SD2.store(true, Ordering::SeqCst);
+        });
+
+        run_with_cmd(graph, vec![svc], ready_rx, &SD2, shared, cmd_rx, None).unwrap();
+    }
+
+    #[test]
+    fn restart_command_on_stopped_service_starts_it() {
+        use crate::ctl_proto::{new_command_channel, new_shared_state, CtlCommand};
+
+        let svc = make_service_with_needs("exitsvc", &[], &[], "/bin/true");
+        let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
+        let (ready_tx, ready_rx) = mpsc::channel::<String>();
+        drop(ready_tx);
+        static SD3: AtomicBool = AtomicBool::new(false);
+        let shared = new_shared_state();
+        let (cmd_tx, cmd_rx) = new_command_channel();
+
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+            cmd_tx.send(CtlCommand::Restart { service: "exitsvc".to_string(), reply: reply_tx }).unwrap();
+            let result = reply_rx.recv().unwrap();
+            assert!(result.is_ok(), "expected ok but got {:?}", result);
+        });
+
+        run_with_cmd(graph, vec![svc], ready_rx, &SD3, shared, cmd_rx, None).unwrap();
     }
 }

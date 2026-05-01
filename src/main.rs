@@ -67,7 +67,7 @@ fn main() -> Result<()> {
         graph::ServiceGraph::build(services.clone()).context("building dependency graph")?;
 
     let shared = ctl_proto::new_shared_state();
-    let (cmd_tx, _cmd_rx) = ctl_proto::new_command_channel();
+    let (cmd_tx, cmd_rx) = ctl_proto::new_command_channel();
     ctl_server::start(shared.clone(), cmd_tx);
 
     let (ready_tx, ready_rx) = mpsc::channel::<String>();
@@ -98,7 +98,7 @@ fn main() -> Result<()> {
     }
     drop(ready_tx);
 
-    executor::run(graph, services, ready_rx, &SHUTDOWN, shared).context("executor failed")?;
+    executor::run(graph, services, ready_rx, &SHUTDOWN, shared, cmd_rx, Some(dir.to_path_buf())).context("executor failed")?;
 
     if std::process::id() == 1 {
         pid1::supervise_forever(REBOOT.load(Ordering::SeqCst));
