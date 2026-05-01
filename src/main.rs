@@ -29,7 +29,21 @@ extern "C" fn handle_reboot(_: std::ffi::c_int) {
 }
 
 fn main() -> Result<()> {
-    pid1::setup().context("pid1 setup failed")?;
+    // Debug: write to /boot so we can read it after rebooting into dinit
+    if std::process::id() == 1 {
+        let _ = std::fs::write("/boot/flint-debug.txt", "flint-init started as PID 1\n");
+    }
+
+    let setup_result = pid1::setup();
+    if std::process::id() == 1 {
+        let msg = match &setup_result {
+            Ok(()) => "pid1::setup() ok\n".to_string(),
+            Err(e) => format!("pid1::setup() FAILED: {:#}\n", e),
+        };
+        let _ = std::fs::OpenOptions::new().append(true).open("/boot/flint-debug.txt")
+            .and_then(|mut f| { use std::io::Write; f.write_all(msg.as_bytes()) });
+    }
+    setup_result.context("pid1 setup failed")?;
 
     // Install signal handlers before starting any services.
     unsafe {
