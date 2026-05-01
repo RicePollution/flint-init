@@ -139,15 +139,14 @@ pub fn setup() -> Result<()> {
     // tcsetattr(TCSAFLUSH) which blocks until the ttyS0 buffer drains; every
     // byte we write there adds latency before the login prompt appears.
     // Messages are still visible via dmesg / journalctl -k.
-    // kmsg redirect temporarily disabled for debugging — re-enable after boot works
-    // if let Ok(kmsg) = std::fs::OpenOptions::new().write(true).open("/dev/kmsg") {
-    //     use std::os::unix::io::IntoRawFd;
-    //     let fd = kmsg.into_raw_fd();
-    //     unsafe {
-    //         libc::dup2(fd, 2); // stderr → /dev/kmsg
-    //         libc::close(fd);
-    //     }
-    // }
+    if let Ok(kmsg) = std::fs::OpenOptions::new().write(true).open("/dev/kmsg") {
+        use std::os::unix::io::IntoRawFd;
+        let fd = kmsg.into_raw_fd();
+        unsafe {
+            libc::dup2(fd, 2); // stderr → /dev/kmsg
+            libc::close(fd);
+        }
+    }
 
     // Mount remaining filesystems from /etc/fstab (skip root and virtual fs).
     if let Err(e) = crate::fstab::mount_all() {
