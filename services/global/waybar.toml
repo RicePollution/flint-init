@@ -4,5 +4,4 @@ exec = "/usr/bin/waybar"
 restart = "on-failure"
 
 [deps]
-needs = ["hyprland"]
-after = ["dbus"]
+after = ["hyprland", "dbus"]

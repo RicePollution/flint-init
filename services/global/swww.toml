@@ -4,7 +4,7 @@ exec = "/usr/bin/swww-daemon"
 restart = "on-failure"
 
 [deps]
-needs = ["hyprland"]
+after = ["hyprland"]
 
 [ready]
 strategy = "socket"

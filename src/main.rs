@@ -29,9 +29,22 @@ extern "C" fn handle_reboot(_: std::ffi::c_int) {
 }
 
 fn main() -> Result<()> {
-    // Debug: write to /boot so we can read it after rebooting into dinit
+    // Debug: write to /boot so we can read it after rebooting into dinit.
+    // Use O_SYNC so writes hit disk immediately even if we panic right after.
+    fn debug_log(msg: &str) {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true).append(true)
+            .custom_flags(libc::O_SYNC)
+            .open("/boot/flint-debug.txt")
+        {
+            let _ = f.write_all(msg.as_bytes());
+        }
+    }
+
     if std::process::id() == 1 {
-        let _ = std::fs::write("/boot/flint-debug.txt", "flint-init started as PID 1\n");
+        debug_log("flint-init started as PID 1\n");
     }
 
     let setup_result = pid1::setup();
@@ -40,11 +53,11 @@ fn main() -> Result<()> {
             Ok(()) => "pid1::setup() ok\n".to_string(),
             Err(e) => format!("pid1::setup() FAILED: {:#}\n", e),
         };
-        let _ = std::fs::OpenOptions::new().append(true).open("/boot/flint-debug.txt")
-            .and_then(|mut f| { use std::io::Write; f.write_all(msg.as_bytes()) });
+        debug_log(&msg);
     }
     setup_result.context("pid1 setup failed")?;
 
+    if std::process::id() == 1 { debug_log("installing signal handlers\n"); }
     // Install signal handlers before starting any services.
     unsafe {
         signal(Signal::SIGTERM, SigHandler::Handler(handle_shutdown))
@@ -55,6 +68,7 @@ fn main() -> Result<()> {
             .context("failed to install SIGUSR1 handler")?;
     }
 
+    if std::process::id() == 1 { debug_log("loading services\n"); }
     let args: Vec<String> = std::env::args().collect();
     let default_dir = if std::process::id() == 1 {
         "/etc/flint/services"
@@ -67,7 +81,9 @@ fn main() -> Result<()> {
     let manifest_path = dir.join(flint_init::cache::MANIFEST_FILENAME);
     let t0 = std::time::Instant::now();
     let services = cache::load_services_cached(dir, &manifest_path)
+        .map_err(|e| { if std::process::id() == 1 { debug_log(&format!("load FAILED: {:#}\n", e)); } e })
         .with_context(|| format!("loading services from {:?}", dir))?;
+    if std::process::id() == 1 { debug_log(&format!("loaded {} services\n", services.len())); }
     let load_us = t0.elapsed().as_micros();
 
     if services.is_empty() {
@@ -77,12 +93,16 @@ fn main() -> Result<()> {
 
     eprintln!("[flint] loaded {} service(s) in {}µs", services.len(), load_us);
 
-    let graph =
-        graph::ServiceGraph::build(services.clone()).context("building dependency graph")?;
+    if std::process::id() == 1 { debug_log("building graph\n"); }
+    let graph = graph::ServiceGraph::build(services.clone())
+        .map_err(|e| { if std::process::id() == 1 { debug_log(&format!("graph FAILED: {}\n", e)); } e })
+        .context("building dependency graph")?;
 
+    if std::process::id() == 1 { debug_log("starting ctl server\n"); }
     let shared = ctl_proto::new_shared_state();
     let (cmd_tx, cmd_rx) = ctl_proto::new_command_channel();
     ctl_server::start(shared.clone(), cmd_tx);
+    if std::process::id() == 1 { debug_log("starting executor\n"); }
 
     let (ready_tx, ready_rx) = mpsc::channel::<String>();
 

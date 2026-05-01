@@ -5,5 +5,4 @@ exec = "/usr/bin/dhcpcd --nobackground"
 restart = "on-failure"
 
 [deps]
-after = ["udev-trigger"]
-after = ["nftables"]
+after = ["udev-trigger", "nftables"]

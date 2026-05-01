@@ -4,8 +4,7 @@ exec = "/usr/bin/dockerd"
 restart = "on-failure"
 
 [deps]
-needs = ["containerd"]
-after = ["nftables"]
+after = ["containerd", "nftables"]
 
 [ready]
 strategy = "socket"

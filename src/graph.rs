@@ -41,14 +41,14 @@ impl ServiceGraph {
 
         for svc in &services {
             if let Some(deps) = &svc.deps {
-                // `needs` deps: hard error if unknown
+                // `needs` deps: warn and skip if unknown (don't crash everything)
                 let unique_needs: HashSet<&String> = deps.needs.iter().collect();
                 for dep in &unique_needs {
                     if !service_names.contains(*dep) {
-                        return Err(GraphError::UnknownDep {
-                            service: svc.service.name.clone(),
-                            dep: dep.to_string(),
-                        });
+                        eprintln!(
+                            "[flint] warning: unknown needs-dep '{}' for '{}', skipping",
+                            dep, svc.service.name
+                        );
                     }
                 }
 

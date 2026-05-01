@@ -5,4 +5,4 @@ exec = "/usr/bin/syncthing --no-browser --no-restart"
 restart = "on-failure"
 
 [deps]
-needs = ["networkmanager"]
+after = ["networkmanager"]

@@ -4,4 +4,4 @@ exec = "/usr/bin/wireplumber"
 restart = "never"
 
 [deps]
-needs = ["pipewire"]
+after = ["pipewire"]
