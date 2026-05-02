@@ -30,6 +30,7 @@ extern "C" fn handle_reboot(_: std::ffi::c_int) {
 
 fn main() -> Result<()> {
     pid1::setup().context("pid1 setup failed")?;
+    let boot_start = std::time::Instant::now();
 
     // Install signal handlers before starting any services.
     unsafe {
@@ -99,6 +100,9 @@ fn main() -> Result<()> {
     drop(ready_tx);
 
     executor::run(graph, services, ready_rx, &SHUTDOWN, shared, cmd_rx, Some(dir.to_path_buf())).context("executor failed")?;
+
+    let boot_ms = boot_start.elapsed().as_millis();
+    eprintln!("[flint] boot completed in {:.2}s", boot_ms as f64 / 1000.0);
 
     if std::process::id() == 1 {
         pid1::supervise_forever(REBOOT.load(Ordering::SeqCst));

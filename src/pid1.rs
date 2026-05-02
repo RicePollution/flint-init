@@ -155,16 +155,15 @@ pub fn setup() -> Result<()> {
     let _ = std::os::unix::fs::symlink("/proc/self/fd/1", "/dev/stdout");
     let _ = std::os::unix::fs::symlink("/proc/self/fd/2", "/dev/stderr");
 
-    // Redirect our own logging to the kernel ring buffer so [flint] messages
-    // don't queue up in the serial console output buffer.  agetty calls
-    // tcsetattr(TCSAFLUSH) which blocks until the ttyS0 buffer drains; every
-    // byte we write there adds latency before the login prompt appears.
-    // Messages are still visible via dmesg / journalctl -k.
-    if let Ok(kmsg) = std::fs::OpenOptions::new().write(true).open("/dev/kmsg") {
+    // Redirect our own logging to /dev/console so [flint] status messages
+    // appear on screen during boot.  /dev/console is the kernel's active
+    // console (VGA/framebuffer on real hardware), so this works regardless
+    // of whether a serial console is configured.
+    if let Ok(console) = std::fs::OpenOptions::new().write(true).open("/dev/console") {
         use std::os::unix::io::IntoRawFd;
-        let fd = kmsg.into_raw_fd();
+        let fd = console.into_raw_fd();
         unsafe {
-            libc::dup2(fd, 2); // stderr → /dev/kmsg
+            libc::dup2(fd, 2); // stderr → /dev/console
             libc::close(fd);
         }
     }
