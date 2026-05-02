@@ -155,15 +155,21 @@ pub fn setup() -> Result<()> {
     let _ = std::os::unix::fs::symlink("/proc/self/fd/1", "/dev/stdout");
     let _ = std::os::unix::fs::symlink("/proc/self/fd/2", "/dev/stderr");
 
-    // Redirect our own logging to /dev/console so [flint] status messages
-    // appear on screen during boot.  /dev/console is the kernel's active
-    // console (VGA/framebuffer on real hardware), so this works regardless
-    // of whether a serial console is configured.
-    if let Ok(console) = std::fs::OpenOptions::new().write(true).open("/dev/console") {
+    // Redirect our own logging to the VGA display (/dev/tty1) so [flint]
+    // status messages appear on screen during boot regardless of whether a
+    // serial console (console=ttyS0) is configured.  /dev/console follows
+    // the kernel console= parameter and may point to a serial port instead
+    // of the display; tty1 is always the first VGA virtual terminal.
+    // Fall back to /dev/console if tty1 is unavailable.
+    let tty = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/tty1")
+        .or_else(|_| std::fs::OpenOptions::new().write(true).open("/dev/console"));
+    if let Ok(tty) = tty {
         use std::os::unix::io::IntoRawFd;
-        let fd = console.into_raw_fd();
+        let fd = tty.into_raw_fd();
         unsafe {
-            libc::dup2(fd, 2); // stderr → /dev/console
+            libc::dup2(fd, 2); // stderr → tty1 (VGA display)
             libc::close(fd);
         }
     }
