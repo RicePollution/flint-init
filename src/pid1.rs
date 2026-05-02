@@ -108,6 +108,27 @@ pub fn setup() -> Result<()> {
     // Create runtime directories declared in tmpfiles.d(5).
     apply_tmpfiles();
 
+    // /sys/fs/cgroup — cgroup v2 unified hierarchy.
+    // Required by elogind, systemd-based tools, and resource management.
+    // Must come after /sys is mounted.
+    std::fs::create_dir_all("/sys/fs/cgroup").context("create /sys/fs/cgroup")?;
+    match mount(
+        Some("cgroup2"),
+        "/sys/fs/cgroup",
+        Some("cgroup2"),
+        MsFlags::empty(),
+        None::<&str>,
+    ) {
+        Ok(()) => {}
+        Err(nix::Error::EBUSY) => {
+            eprintln!("[pid1] /sys/fs/cgroup already mounted, skipping");
+        }
+        Err(e) => {
+            // Non-fatal: log and continue — some kernels disable cgroup2
+            eprintln!("[pid1] /sys/fs/cgroup mount failed: {}", e);
+        }
+    }
+
     // /dev — tmpfs (udev will populate it).
     // When CONFIG_DEVTMPFS_MOUNT=y the kernel mounts devtmpfs before exec'ing
     // init, so we get EBUSY here — that is fine, skip the mount.
@@ -153,7 +174,7 @@ pub fn setup() -> Result<()> {
         eprintln!("[pid1] fstab mount warning: {}", e);
     }
 
-    eprintln!("[pid1] mounted /proc, /sys, /dev");
+    eprintln!("[pid1] mounted /proc, /sys, /sys/fs/cgroup, /dev");
     Ok(())
 }
 

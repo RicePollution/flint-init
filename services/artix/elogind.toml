@@ -1,0 +1,11 @@
+[service]
+name = "elogind"
+exec = "/usr/lib/elogind/elogind"
+restart = "on-failure"
+
+[deps]
+needs = ["dbus"]
+
+[ready]
+strategy = "socket"
+path = "/run/elogind/private/org.freedesktop.login1"
