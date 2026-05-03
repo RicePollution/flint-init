@@ -1,4 +1,7 @@
 [service]
 name = "agetty-tty1"
-exec = "/usr/bin/agetty --noclear tty1 38400 linux"
+exec = "/usr/bin/agetty tty1 38400 linux"
 restart = "always"
+
+[deps]
+after = ["udev", "dbus", "elogind", "net-static", "sshd", "nftables"]
