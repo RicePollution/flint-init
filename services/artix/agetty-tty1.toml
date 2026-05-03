@@ -4,4 +4,4 @@ exec = "/usr/bin/agetty tty1 38400 linux"
 restart = "always"
 
 [deps]
-after = ["udev", "dbus", "elogind", "net-static", "sshd", "nftables"]
+after = ["udev", "dbus", "net-static", "nftables", "udev-trigger"]
