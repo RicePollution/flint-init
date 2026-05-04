@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use nix::sys::signal::{signal, SigHandler, Signal};
 
 use flint_init::cache;
+use flint_init::config;
 use flint_init::service::ReadyStrategy;
 
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
@@ -51,10 +52,13 @@ fn main() -> Result<()> {
     let services_dir = args.get(1).map(String::as_str).unwrap_or(default_dir);
     let dir = Path::new(services_dir);
 
+    let flint_cfg = config::load_config();
+
     let manifest_path = dir.join(flint_init::cache::MANIFEST_FILENAME);
     let t0 = std::time::Instant::now();
-    let services = cache::load_services_cached(dir, &manifest_path)
+    let raw_services = cache::load_services_cached(dir, &manifest_path)
         .with_context(|| format!("loading services from {:?}", dir))?;
+    let services = flint_cfg.apply_to(raw_services);
     let load_us = t0.elapsed().as_micros();
 
     if services.is_empty() {

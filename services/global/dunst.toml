@@ -1,7 +1,7 @@
 [service]
 name = "dunst"
 exec = "/usr/bin/dunst"
-# user = "your-username"  # desktop service: set to your login user
+user = "%U"
 restart = "on-failure"
 
 [deps]

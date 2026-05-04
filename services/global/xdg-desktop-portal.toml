@@ -1,7 +1,7 @@
 [service]
 name = "xdg-desktop-portal"
 exec = "/usr/lib/xdg-desktop-portal"
-# user = "your-username"  # desktop service: set to your login user
+user = "%U"
 restart = "on-failure"
 
 [deps]

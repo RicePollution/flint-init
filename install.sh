@@ -222,6 +222,49 @@ acquire_binary() {
     esac
 }
 
+SESSION_USER=""
+
+detect_session_user() {
+    # Prefer $SUDO_USER — set when the script is run via sudo
+    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+        SESSION_USER="$SUDO_USER"
+        return
+    fi
+    # Fall back to logname (the user who originally opened the terminal)
+    local logged_in
+    logged_in=$(logname 2>/dev/null) || true
+    if [ -n "$logged_in" ] && [ "$logged_in" != "root" ]; then
+        SESSION_USER="$logged_in"
+        return
+    fi
+    # Last resort: prompt
+    echo ""
+    echo "[flint-install] Desktop services (hyprland, waybar, pipewire, etc.) need a session user."
+    read -r -p "[flint-install] Enter your login username (leave empty to skip): " SESSION_USER || true
+}
+
+write_flint_config() {
+    detect_session_user
+    mkdir -p "$ROOT/etc/flint"
+    if [ -z "$SESSION_USER" ]; then
+        echo "[flint-install] note: no session user set; edit /etc/flint/config.toml to configure desktop services" >&2
+        # Still write the config file with an empty placeholder so the path exists
+        cat > "$ROOT/etc/flint/config.toml" << 'EOF'
+[global]
+# Uncomment and set to your login username to run desktop services
+# (hyprland, waybar, pipewire, dunst, etc.) as that user.
+# session_user = "your-username"
+EOF
+    else
+        cat > "$ROOT/etc/flint/config.toml" << EOF
+[global]
+# Desktop/session services (hyprland, waybar, pipewire, etc.) run as this user.
+session_user = "$SESSION_USER"
+EOF
+        echo "[flint-install]   $ROOT/etc/flint/config.toml (session_user = $SESSION_USER) [ok]"
+    fi
+}
+
 print_summary() {
     echo ""
     echo "=========================================="
@@ -232,6 +275,7 @@ print_summary() {
     echo "  $ROOT/usr/sbin/flint-init"
     echo "  $ROOT/usr/bin/flint-ctl"
     echo "  $ROOT/etc/flint/services/"
+    echo "  $ROOT/etc/flint/config.toml  (session_user = ${SESSION_USER:-<not set>})"
     echo ""
     echo "To TEST (one boot, non-destructive):"
     echo "  At your bootloader, add to kernel parameters:"
@@ -262,6 +306,7 @@ main() {
     detect_distro
     acquire_binary
     install_files
+    write_flint_config
     configure_bootloader
     print_summary
 }

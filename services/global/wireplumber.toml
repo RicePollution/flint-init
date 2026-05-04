@@ -1,7 +1,7 @@
 [service]
 name = "wireplumber"
 exec = "/usr/bin/wireplumber"
-# user = "your-username"  # desktop service: set to your login user
+user = "%U"
 restart = "never"
 
 [deps]
