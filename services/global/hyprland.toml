@@ -1,6 +1,6 @@
 [service]
 name = "hyprland"
-exec = "/usr/bin/hyprland"
+exec = "env WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1 /usr/bin/hyprland"
 restart = "never"
 
 [deps]

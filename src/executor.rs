@@ -29,21 +29,62 @@ pub enum ExecutorError {
     Fork(#[from] nix::Error),
     #[error("service '{0}' has empty exec string")]
     EmptyExec(String),
+    #[error("service '{0}': unknown user '{1}'")]
+    UnknownUser(String, String),
+}
+
+/// Build (exec_path, argv) from a service definition.
+///
+/// When `args` is present, `exec` is the binary and `args` are argv[1..],
+/// allowing arguments with spaces without quoting ambiguity.
+/// When `args` is absent, fall back to splitting `exec` on whitespace for
+/// backwards compatibility with existing service files.
+fn build_exec_args(def: &ServiceDef) -> Result<(CString, Vec<CString>), ExecutorError> {
+    let name = &def.service.name;
+    if let Some(explicit_args) = &def.service.args {
+        if def.service.exec.is_empty() {
+            return Err(ExecutorError::EmptyExec(name.clone()));
+        }
+        let exec = CString::new(def.service.exec.as_str())
+            .map_err(|_| ExecutorError::EmptyExec(name.clone()))?;
+        let mut argv = vec![exec.clone()];
+        for arg in explicit_args {
+            argv.push(CString::new(arg.as_str())
+                .map_err(|_| ExecutorError::EmptyExec(name.clone()))?);
+        }
+        Ok((exec, argv))
+    } else {
+        let parts: Vec<CString> = def.service.exec
+            .split_whitespace()
+            .map(|s| CString::new(s).unwrap())
+            .collect();
+        if parts.is_empty() {
+            return Err(ExecutorError::EmptyExec(name.clone()));
+        }
+        let exec_path = parts[0].clone();
+        Ok((exec_path, parts))
+    }
 }
 
 fn spawn_service(def: &ServiceDef) -> Result<Pid, ExecutorError> {
-    let parts: Vec<CString> = def
-        .service
-        .exec
-        .split_whitespace()
-        .map(|s| CString::new(s).unwrap())
-        .collect();
+    let (exec_path, argv) = build_exec_args(def)?;
 
-    if parts.is_empty() {
-        return Err(ExecutorError::EmptyExec(def.service.name.clone()));
-    }
-
-    let exec_path = parts[0].clone();
+    // Resolve user credentials in the parent before forking so we can return
+    // a typed error without leaving a zombie child.
+    let creds: Option<(nix::unistd::Uid, nix::unistd::Gid)> =
+        if let Some(user_name) = &def.service.user {
+            match nix::unistd::User::from_name(user_name)
+                .map_err(|_| ExecutorError::UnknownUser(def.service.name.clone(), user_name.clone()))?
+            {
+                Some(u) => Some((u.uid, u.gid)),
+                None => return Err(ExecutorError::UnknownUser(
+                    def.service.name.clone(),
+                    user_name.clone(),
+                )),
+            }
+        } else {
+            None
+        };
 
     match unsafe { fork() }? {
         ForkResult::Parent { child } => Ok(child),
@@ -51,7 +92,13 @@ fn spawn_service(def: &ServiceDef) -> Result<Pid, ExecutorError> {
             if let Some(adj) = def.resources.as_ref().and_then(|r| r.oom_score_adj) {
                 let _ = std::fs::write("/proc/self/oom_score_adj", format!("{}\n", adj));
             }
-            let _ = execv(&exec_path, &parts);
+            // Drop privileges before exec. setgid first, then setuid — after
+            // setuid we may lose the ability to call setgid.
+            if let Some((uid, gid)) = creds {
+                let _ = nix::unistd::setgid(gid);
+                let _ = nix::unistd::setuid(uid);
+            }
+            let _ = execv(&exec_path, &argv);
             std::process::exit(127);
         }
     }
@@ -602,6 +649,8 @@ mod tests {
                 name: name.to_string(),
                 exec: exec.to_string(),
                 restart: None,
+                user: None,
+                args: None,
             },
             deps: if after.is_empty() {
                 None
@@ -622,6 +671,8 @@ mod tests {
                 name: name.to_string(),
                 exec: exec.to_string(),
                 restart: None,
+                user: None,
+                args: None,
             },
             deps: if after.is_empty() && needs.is_empty() {
                 None
@@ -647,6 +698,8 @@ mod tests {
                 name: name.to_string(),
                 exec: exec.to_string(),
                 restart: Some(restart),
+                user: None,
+                args: None,
             },
             deps: if needs.is_empty() {
                 None
@@ -1003,6 +1056,49 @@ mod tests {
         });
 
         run_with_cmd(graph, vec![svc], ready_rx, &SD2, shared, cmd_rx, None).unwrap();
+    }
+
+    #[test]
+    fn spawn_fails_for_unknown_user() {
+        let mut svc = make_service_with_needs("bad_user_svc", &[], &[], "/usr/bin/true");
+        svc.service.user = Some("nonexistent_flint_user_xyz_9999".to_string());
+        let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
+        let result = run_no_ready(graph, vec![svc]);
+        assert!(
+            matches!(result, Err(ExecutorError::UnknownUser(..))),
+            "expected UnknownUser error, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn exec_args_array_runs_command_with_arguments() {
+        // exec = "/bin/sh", args = ["-c", "exit 0"] — should succeed
+        let mut svc = make_service_with_needs("args_svc", &[], &[], "/bin/sh");
+        svc.service.args = Some(vec!["-c".to_string(), "exit 0".to_string()]);
+        let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
+        assert!(run_no_ready(graph, vec![svc]).is_ok());
+    }
+
+    #[test]
+    fn exec_args_array_handles_argument_with_spaces() {
+        // Verify that when using the args array, a space-containing arg is
+        // passed as a single argument, not split.
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.txt");
+        let out_str = out.to_str().unwrap().to_string();
+        // Write "$1" (first arg) to the output file; the arg will contain a space
+        let mut svc = make_service_with_needs("space_arg_svc", &[], &[], "/bin/sh");
+        svc.service.args = Some(vec![
+            "-c".to_string(),
+            format!("printf '%s' \"$1\" > {}", out_str),
+            "sh".to_string(),
+            "hello world".to_string(), // this space must not be split
+        ]);
+        let graph = ServiceGraph::build(vec![svc.clone()]).unwrap();
+        run_no_ready(graph, vec![svc]).unwrap();
+        let content = std::fs::read_to_string(&out).unwrap_or_default();
+        assert_eq!(content, "hello world");
     }
 
     #[test]

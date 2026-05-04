@@ -9,6 +9,11 @@ pub struct CatalogEntry {
 
 pub type Catalog = HashMap<String, CatalogEntry>;
 
+/// Distros with service definitions in the catalog.
+/// Any ID= value from /etc/os-release that is not in this list is rejected
+/// to prevent URL injection via a compromised os-release file.
+const ALLOWED_DISTROS: &[&str] = &["arch", "artix", "void", "gentoo"];
+
 pub fn detect_distro() -> String {
     detect_distro_from("/etc/os-release")
 }
@@ -23,7 +28,15 @@ pub fn detect_distro_from(path: &str) -> String {
     };
     for line in content.lines() {
         if let Some(val) = line.strip_prefix("ID=") {
-            return val.trim_matches('"').to_string();
+            let id = val.trim_matches('"');
+            if ALLOWED_DISTROS.contains(&id) {
+                return id.to_string();
+            }
+            eprintln!(
+                "flint-ctl: warning: unrecognized distro '{}', defaulting to artix",
+                id
+            );
+            return "artix".to_string();
         }
     }
     eprintln!("flint-ctl: warning: ID= not found in {}, defaulting to artix", path);
@@ -34,6 +47,27 @@ const CATALOG_URL: &str =
     "https://raw.githubusercontent.com/RicePollution/flint-init/main/catalog.toml";
 const CACHE_PATH: &str = "/var/cache/flint/catalog.toml";
 const CACHE_TTL_SECS: u64 = 86400;
+
+/// Write `content` to `path` atomically with restrictive permissions.
+///
+/// The parent directory is created with mode 0o700 (root-only), and the
+/// file itself is written with mode 0o600. An atomic rename is used to
+/// prevent partial reads of an in-progress write.
+pub fn write_catalog_cache(path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+    }
+
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, content)?;
+    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+    std::fs::rename(&tmp, path)?;
+
+    Ok(())
+}
 
 pub fn fetch_catalog() -> anyhow::Result<Catalog> {
     use std::time::Duration;
@@ -54,10 +88,7 @@ pub fn fetch_catalog() -> anyhow::Result<Catalog> {
         .map_err(|e| anyhow::anyhow!("failed to fetch catalog: {}", e))?
         .into_string()?;
 
-    if let Some(parent) = cache.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Err(e) = std::fs::write(cache, &content) {
+    if let Err(e) = write_catalog_cache(cache, &content) {
         eprintln!("flint-ctl: warning: could not write catalog cache: {}", e);
     }
 
@@ -186,6 +217,56 @@ needs = ["dbus"]
 "#;
         let missing = missing_deps(toml_str, dir.path()).unwrap();
         assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn detect_distro_rejects_path_traversal_in_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("os-release");
+        std::fs::write(&path, "ID=../../../etc/passwd\n").unwrap();
+        let result = detect_distro_from(path.to_str().unwrap());
+        assert_eq!(result, "artix", "path traversal in ID= must be rejected");
+    }
+
+    #[test]
+    fn detect_distro_rejects_unknown_distro() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("os-release");
+        std::fs::write(&path, "ID=ubuntu\n").unwrap();
+        let result = detect_distro_from(path.to_str().unwrap());
+        assert_eq!(result, "artix", "unknown distro must fall back to artix");
+    }
+
+    #[test]
+    fn detect_distro_accepts_all_known_distros() {
+        for distro in &["arch", "artix", "void", "gentoo"] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("os-release");
+            std::fs::write(&path, format!("ID={}\n", distro)).unwrap();
+            let result = detect_distro_from(path.to_str().unwrap());
+            assert_eq!(&result, distro, "known distro {} should be accepted", distro);
+        }
+    }
+
+    #[test]
+    fn write_catalog_cache_creates_dir_with_0700_and_file_with_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join("subdir").join("catalog.toml");
+        write_catalog_cache(&cache_path, "content").unwrap();
+
+        let dir_meta = cache_path.parent().unwrap().metadata().unwrap();
+        assert_eq!(
+            dir_meta.permissions().mode() & 0o777,
+            0o700,
+            "cache dir should be 0700"
+        );
+        let file_meta = cache_path.metadata().unwrap();
+        assert_eq!(
+            file_meta.permissions().mode() & 0o777,
+            0o600,
+            "cache file should be 0600"
+        );
     }
 
     #[test]

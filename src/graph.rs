@@ -228,6 +228,8 @@ mod tests {
                 name: name.to_string(),
                 exec: format!("/bin/{}", name),
                 restart: None,
+                user: None,
+                args: None,
             },
             deps: if after.is_empty() && needs.is_empty() {
                 None

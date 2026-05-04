@@ -1,4 +1,4 @@
 [service]
 name = "agetty-tty1"
-exec = "/usr/bin/agetty --noclear tty1 linux"
+exec = "/usr/bin/agetty --autologin keegan --noclear tty1 linux"
 restart = "always"
