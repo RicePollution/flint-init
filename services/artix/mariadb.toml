@@ -1,6 +1,7 @@
 [service]
 name = "mariadb"
-exec = "/usr/bin/mariadbd --user=mysql --datadir=/var/lib/mysql"
+exec = "/usr/bin/mariadbd --datadir=/var/lib/mysql"
+user = "mysql"
 restart = "on-failure"
 
 [deps]

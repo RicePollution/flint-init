@@ -2,6 +2,7 @@
 [service]
 name = "pipewire"
 exec = "/usr/bin/pipewire"
+# user = "your-username"  # desktop service: set to your login user
 restart = "never"
 
 [deps]

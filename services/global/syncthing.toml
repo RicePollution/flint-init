@@ -3,6 +3,7 @@
 name = "syncthing"
 exec = "/usr/bin/syncthing --no-browser --no-restart"
 restart = "on-failure"
+user = "syncthing"
 
 [deps]
 after = ["networkmanager"]

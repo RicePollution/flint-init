@@ -2,6 +2,7 @@
 name = "redis"
 exec = "/usr/bin/redis-server /etc/redis/redis.conf --daemonize no"
 restart = "on-failure"
+user = "redis"
 
 [ready]
 strategy = "socket"

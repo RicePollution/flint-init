@@ -2,6 +2,7 @@
 name = "tor"
 exec = "/usr/bin/tor --RunAsDaemon 0"
 restart = "on-failure"
+user = "tor"
 
 [deps]
 after = ["networkmanager", "nftables"]

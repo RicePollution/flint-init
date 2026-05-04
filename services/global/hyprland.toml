@@ -1,6 +1,7 @@
 [service]
 name = "hyprland"
 exec = "env WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1 /usr/bin/hyprland"
+# user = "your-username"  # desktop service: set to your login user
 restart = "never"
 
 [deps]

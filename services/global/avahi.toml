@@ -1,6 +1,6 @@
 [service]
 name = "avahi"
-exec = "/usr/bin/avahi-daemon --no-drop-root"
+exec = "/usr/bin/avahi-daemon"
 restart = "never"
 
 [deps]

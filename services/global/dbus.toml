@@ -1,5 +1,6 @@
 [service]
 name = "dbus"
+user = "root"
 exec = "/usr/bin/dbus-daemon --system --nofork --nopidfile"
 restart = "on-failure"
 

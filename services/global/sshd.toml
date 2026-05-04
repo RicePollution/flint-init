@@ -1,5 +1,6 @@
 [service]
 name = "sshd"
+user = "root"
 exec = "/usr/bin/sshd -D -e"
 restart = "on-failure"
 

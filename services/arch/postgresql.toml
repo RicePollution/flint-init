@@ -2,6 +2,7 @@
 name = "postgresql"
 exec = "/usr/bin/postgres -D /var/lib/postgres/data"
 restart = "on-failure"
+user = "postgres"
 
 [deps]
 after = ["udev-trigger"]

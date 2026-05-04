@@ -1,5 +1,6 @@
 [service]
 name = "networkmanager"
+user = "root"
 exec = "/usr/bin/NetworkManager --no-daemon"
 restart = "on-failure"
 

@@ -1,6 +1,7 @@
 [service]
 name = "hypridle"
 exec = "/usr/bin/hypridle"
+# user = "your-username"  # desktop service: set to your login user
 restart = "on-failure"
 
 [deps]

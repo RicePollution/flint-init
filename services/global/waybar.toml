@@ -1,6 +1,7 @@
 [service]
 name = "waybar"
 exec = "/usr/bin/waybar"
+# user = "your-username"  # desktop service: set to your login user
 restart = "on-failure"
 
 [deps]

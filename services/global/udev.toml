@@ -1,5 +1,6 @@
 [service]
 name = "udev"
+user = "root"
 exec = "/usr/bin/udevd"
 restart = "on-failure"
 
