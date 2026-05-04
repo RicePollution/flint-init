@@ -36,10 +36,22 @@ fn find_in_path(name: &str) -> Option<String> {
 }
 
 fn cmd_scaffold(name: &str) {
-    let exec = find_in_path(name).unwrap_or_else(|| {
-        eprintln!("flint-ctl: warning: \"{}\" not found in $PATH — fill in exec manually", name);
-        format!("/usr/bin/{}", name)
-    });
+    let catalog_path = format!("{}/{}.toml", SERVICES_DIR, name);
+    if std::path::Path::new(&catalog_path).exists() {
+        eprintln!(
+            "flint-ctl: note: {} already has a catalog entry at {} — use 'flint-ctl get {}' instead",
+            name, catalog_path, name
+        );
+    }
+
+    let exec = match find_in_path(name) {
+        Some(p) => p,
+        None => {
+            eprintln!("flint-ctl: \"{}\" not found in $PATH — cannot generate scaffold", name);
+            process::exit(1);
+        }
+    };
+
     print!(
         r#"[service]
 name = "{name}"
