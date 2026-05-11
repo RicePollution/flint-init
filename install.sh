@@ -265,6 +265,22 @@ EOF
     fi
 }
 
+run_preflight_check() {
+    echo "[flint-install] running preflight check..."
+    if "$FLINT_CTL_BIN" check --services-dir "$ROOT/etc/flint/services"; then
+        echo "[flint-install] preflight check passed [ok]"
+    else
+        echo "" >&2
+        echo "==========================================" >&2
+        echo "  WARNING: preflight found errors above." >&2
+        echo "  Fix them before rebooting with flint-init." >&2
+        echo "  The GRUB entry has still been written —" >&2
+        echo "  your original boot entry is unchanged." >&2
+        echo "==========================================" >&2
+        echo ""
+    fi
+}
+
 print_summary() {
     echo ""
     echo "=========================================="
@@ -307,6 +323,7 @@ main() {
     acquire_binary
     install_files
     write_flint_config
+    run_preflight_check
     configure_bootloader
     print_summary
 }

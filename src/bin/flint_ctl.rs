@@ -4,8 +4,12 @@ use std::process;
 
 use serde_json::json;
 use flint_init::catalog;
+use flint_init::check;
+use flint_init::scaffold;
 
 const CTL_SOCKET_PATH: &str = "/run/flint/ctl.sock";
+const SERVICES_DIR: &str = "/etc/flint/services";
+const REPO_URL: &str = "https://github.com/RicePollution/flint-init";
 
 fn usage() -> ! {
     eprintln!("Usage: flint-ctl <command> [args]");
@@ -18,6 +22,9 @@ fn usage() -> ! {
     eprintln!("  get --list           List services available in the catalog");
     eprintln!("  get <service>        Fetch and install a service from the catalog");
     eprintln!("  scaffold <service>   Print a starter TOML for a service not in the catalog");
+    eprintln!("  check [--services-dir <path>]");
+    eprintln!("                       Migration audit + preflight check");
+    eprintln!("  contribute <service> Show instructions to contribute a service to the catalog");
     process::exit(1);
 }
 
@@ -52,26 +59,67 @@ fn cmd_scaffold(name: &str) {
         }
     };
 
-    print!(
-        r#"[service]
-name = "{name}"
-exec = "{exec}"   # verify foreground/nodaemon flags
-restart = "on-failure"
-
-# [deps]
-# needs = ["dbus"]
-
-# [ready]
-# strategy = "pidfile"
-# path = "/run/{name}/{name}.pid"
-"#
-    );
+    scaffold::print_scaffold(name, &exec);
 }
 
-const SERVICES_DIR: &str = "/etc/flint/services";
+fn cmd_check(services_dir: &str) {
+    let dir = std::path::Path::new(services_dir);
+    // Fetch catalog for migration audit; continue without it if offline.
+    let catalog = catalog::fetch_catalog().ok();
+    let ok = check::run_check(dir, catalog.as_ref());
+    if !ok {
+        process::exit(1);
+    }
+}
+
+fn cmd_contribute(name: &str) {
+    let service_path = format!("{}/{}.toml", SERVICES_DIR, name);
+    let toml_content = match std::fs::read_to_string(&service_path) {
+        Ok(c) => c,
+        Err(_) => {
+            eprintln!(
+                "flint-ctl: {}.toml not found in {} — install or create it first",
+                name, SERVICES_DIR
+            );
+            process::exit(1);
+        }
+    };
+
+    if !prompt(&format!("Has {}.toml been running correctly on your system? [y/N] ", name)) {
+        println!("Confirm it works first, then re-run: flint-ctl contribute {}", name);
+        return;
+    }
+
+    let distro = catalog::detect_distro();
+    let distro_agnostic =
+        prompt("Are the binary paths in this TOML the same on all distros? [y/N] ");
+    let target_subdir = if distro_agnostic { "global" } else { &distro };
+    let target_path = format!("services/{}/{}.toml", target_subdir, name);
+    let branch_name = format!("contribute/{}-{}", target_subdir, name);
+    let pr_title = format!("catalog: add {}/{}", target_subdir, name);
+
+    println!();
+    println!("To contribute {} to the flint-init catalog:", name);
+    println!();
+    println!("  1. Fork {} on GitHub", REPO_URL);
+    println!();
+    println!("  2. Clone your fork and create a branch:");
+    println!("       git clone {}/fork-url", REPO_URL);
+    println!("       cd flint-init");
+    println!("       git checkout -b {}", branch_name);
+    println!();
+    println!("  3. Copy your service definition:");
+    println!("       cp {} {}", service_path, target_path);
+    println!();
+    println!("  4. Open a PR — title: \"{}\"", pr_title);
+    println!();
+    println!("Your {}.toml:", name);
+    println!("{}", "─".repeat(42));
+    print!("{}", toml_content);
+    println!("{}", "─".repeat(42));
+}
 
 fn prompt(msg: &str) -> bool {
-    use std::io::Write;
     print!("{}", msg);
     std::io::stdout().flush().ok();
     let mut line = String::new();
@@ -174,6 +222,20 @@ fn main() {
         }
     }
 
+    // check [--services-dir <path>]
+    if let [cmd] = args.as_slice() {
+        if cmd == "check" {
+            cmd_check(SERVICES_DIR);
+            return;
+        }
+    }
+    if let [cmd, flag, path] = args.as_slice() {
+        if cmd == "check" && flag == "--services-dir" {
+            cmd_check(path);
+            return;
+        }
+    }
+
     if let [cmd, name] = args.as_slice() {
         if cmd == "get" {
             cmd_get(name);
@@ -181,6 +243,10 @@ fn main() {
         }
         if cmd == "scaffold" {
             cmd_scaffold(name);
+            return;
+        }
+        if cmd == "contribute" {
+            cmd_contribute(name);
             return;
         }
     }
@@ -210,7 +276,6 @@ fn main() {
     for line in reader.lines() {
         match line {
             Ok(l) => {
-                // Pretty-print JSON if possible, otherwise raw.
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&l) {
                     println!("{}", serde_json::to_string_pretty(&v).unwrap_or(l));
                 } else {
